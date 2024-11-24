@@ -3,6 +3,7 @@ package user
 import (
 	"email-platform/config"
 	"email-platform/utils"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -26,8 +27,9 @@ func LoginHandler(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
 	}
 
-	token, err := utils.GenerateJWT(user.ID)
+	token, err := utils.GenerateJWT(user.ID, user.Email)
 	if err != nil {
+		fmt.Println("GenerateJWT", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate token"})
 	}
 

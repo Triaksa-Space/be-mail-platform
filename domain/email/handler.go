@@ -55,6 +55,19 @@ func ListEmailsHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, emails)
 }
 
+func ListEmailByIDHandler(c echo.Context) error {
+	userID := c.Param("user_id")
+
+	// Fetch all emails
+	var emails []Email
+	err := config.DB.Select(&emails, "SELECT * FROM emails WHERE user_id = ? ORDER BY created_at DESC", userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
+	}
+
+	return c.JSON(http.StatusOK, emails)
+}
+
 func DeleteEmailHandler(c echo.Context) error {
 	emailID := c.Param("id")
 
