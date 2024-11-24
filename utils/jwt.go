@@ -10,7 +10,6 @@ import (
 
 func GenerateJWT(userID int64, email string) (string, error) {
 	jwtSecret := viper.GetString("JWT_SECRET")
-	fmt.Println("jwtSecret", jwtSecret)
 
 	claims := jwt.MapClaims{
 		"user_id": userID,
@@ -23,6 +22,5 @@ func GenerateJWT(userID int64, email string) (string, error) {
 		fmt.Println("Error signing token:", err)
 		return "", err
 	}
-	fmt.Println("Generated token:", tokenString)
 	return tokenString, nil
 }
