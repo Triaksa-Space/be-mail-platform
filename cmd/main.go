@@ -2,36 +2,30 @@ package main
 
 import (
 	"email-platform/config"
-	"log"
-	"os"
+	"email-platform/domain/user"
 
-	_ "github.com/lib/pq"
-	"github.com/pressly/goose/v3"
+	"github.com/labstack/echo/v4"
 )
 
 func main() {
-	// Initialize database connection
+	config.InitConfig()
 	config.InitDB()
+	e := echo.New()
 
-	// Path to the migrations folder
-	migrationsDir := "./db/migrations"
+	// User routes
+	e.POST("/user/login", user.LoginHandler)
+	// e.POST("/user/logout", user.LogoutHandler)
+	// e.PUT("/user/change_password", user.ChangePasswordHandler)
+	// e.POST("/user", user.CreateUserHandler)
+	// e.POST("/user/bulk", user.BulkCreateUserHandler)
+	// e.DELETE("/user/:id", user.DeleteUserHandler)
 
-	// Extract the raw *sql.DB from *sqlx.DB
-	db := config.DB.DB
+	// // Email routes
+	// emailGroup := e.Group("/email")
+	// emailGroup.POST("/", email.SendEmailHandler)
+	// emailGroup.GET("/:id", email.GetEmailHandler)
+	// emailGroup.GET("/", email.ListEmailsHandler)
+	// emailGroup.DELETE("/:id", email.DeleteEmailHandler)
 
-	// Ensure the database connection is closed after the program exits
-	defer db.Close()
-
-	// Command-line arguments
-	args := os.Args
-	if len(args) < 2 {
-		log.Fatal("Please specify a migration command (up, down, status, etc.)")
-	}
-
-	command := args[1]
-
-	// Run Goose command
-	if err := goose.Run(command, db, migrationsDir); err != nil {
-		log.Fatalf("Failed to execute goose command: %v", err)
-	}
+	e.Logger.Fatal(e.Start(":8080"))
 }
