@@ -24,10 +24,10 @@ func InitDB() {
 }
 
 func InitConfig() {
-	viper.SetConfigName("config") // name of config file (without extension)
-	viper.SetConfigType(".env")   // or viper.SetConfigType("yml")
-	viper.AddConfigPath(".")      // optionally look for config in the working directory
-	viper.AutomaticEnv()          // read in environment variables that match
+	viper.SetConfigName(".env") // name of config file (without extension)
+	viper.SetConfigType("env")  // set the config type to "env"
+	viper.AddConfigPath(".")    // optionally look for config in the working directory
+	viper.AutomaticEnv()        // read in environment variables that match
 
 	if err := viper.ReadInConfig(); err != nil {
 		log.Fatalf("Error reading config file, %s", err)

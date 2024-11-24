@@ -11,3 +11,18 @@ type User struct {
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
 }
+
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" validate:"required"`
+	NewPassword string `json:"new_password" validate:"required,min=6"`
+}
+
+type CreateUserRequest struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=6"`
+	RoleID   int    `json:"role_id" validate:"required"`
+}
+
+type BulkCreateUserRequest struct {
+	Users []CreateUserRequest `json:"users" validate:"required"`
+}
