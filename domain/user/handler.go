@@ -87,9 +87,9 @@ func CreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
 	}
 
-	if err := c.Validate(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-	}
+	// if err := c.Validate(req); err != nil {
+	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	// }
 
 	// Hash the password
 	hashedPassword, err := utils.HashPassword(req.Password)
@@ -177,4 +177,42 @@ func DeleteUserHandler(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "User deleted successfully"})
+}
+
+func GetUserHandler(c echo.Context) error {
+	userID := c.Param("id")
+
+	// Fetch user details by ID
+	var user User
+	err := config.DB.Get(&user, "SELECT * FROM users WHERE id = ?", userID)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	return c.JSON(http.StatusOK, user)
+}
+
+func GetUserMeHandler(c echo.Context) error {
+	// Extract user ID from JWT (set by JWT middleware)
+	userID := c.Get("user_id").(int64)
+
+	// Fetch user details by ID
+	var user User
+	err := config.DB.Get(&user, "SELECT * FROM users WHERE id = ?", userID)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	return c.JSON(http.StatusOK, user)
+}
+
+func ListUsersHandler(c echo.Context) error {
+	// Fetch all users
+	var users []User
+	err := config.DB.Select(&users, "SELECT * FROM users ORDER BY last_login DESC")
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch users"})
+	}
+
+	return c.JSON(http.StatusOK, users)
 }

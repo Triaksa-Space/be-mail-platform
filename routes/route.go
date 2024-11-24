@@ -15,15 +15,18 @@ func RegisterRoutes(e *echo.Echo) {
 
 	userGroup := e.Group("/user")
 	userGroup.Use(middleware.JWTMiddleware)
-	userGroup.PUT("/user/change_password", user.ChangePasswordHandler)
-	userGroup.POST("/user", user.CreateUserHandler, middleware.RoleMiddleware(1))          // Admin-only
-	userGroup.POST("/user/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(1)) // Admin-only
-	userGroup.DELETE("/user/:id", user.DeleteUserHandler, middleware.RoleMiddleware(1))    // Admin-only
+	userGroup.PUT("/change_password", user.ChangePasswordHandler)
+	userGroup.POST("/", user.CreateUserHandler, middleware.RoleMiddleware(0))         // Admin-only
+	userGroup.POST("/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(0)) // Admin-only
+	userGroup.GET("/:id", user.GetUserHandler, middleware.RoleMiddleware(0))
+	userGroup.GET("/get_user_me", user.GetUserMeHandler)
+	userGroup.GET("/", user.ListUsersHandler, middleware.RoleMiddleware(0))
+	userGroup.DELETE("/:id", user.DeleteUserHandler, middleware.RoleMiddleware(0)) // Admin-only
 
 	// Email routes
 	emailGroup := e.Group("/email", middleware.JWTMiddleware)
 	emailGroup.GET("/:id", email.GetEmailHandler)
-	emailGroup.GET("/user/:user_id", email.ListEmailByIDHandler)
-	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(1))
-	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(1)) // Admin-only
+	emailGroup.GET("/by_user/:user_id", email.ListEmailByIDHandler)
+	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(0))
+	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(0)) // Admin-only
 }
