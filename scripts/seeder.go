@@ -10,6 +10,7 @@ import (
 )
 
 func main() {
+	config.InitConfig()
 	config.InitDB()
 
 	// Seed users

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"log"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -14,7 +13,6 @@ var DB *sqlx.DB
 func InitDB() {
 	// Replace with your MySQL DSN
 	dsn := viper.GetString("DATABASE_URL") // Example: "user:password@tcp(localhost:3306)/simple_api"
-	fmt.Println("dsn", dsn)
 	var err error
 	DB, err = sqlx.Connect("mysql", dsn)
 	if err != nil {
