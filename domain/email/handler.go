@@ -2,6 +2,7 @@ package email
 
 import (
 	"email-platform/config"
+	"fmt"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -56,12 +57,14 @@ func ListEmailsHandler(c echo.Context) error {
 }
 
 func ListEmailByIDHandler(c echo.Context) error {
-	userID := c.Param("user_id")
+	// Extract user ID from JWT (set by JWT middleware)
+	userID := c.Get("user_id").(int64)
 
 	// Fetch all emails
 	var emails []Email
-	err := config.DB.Select(&emails, "SELECT * FROM emails WHERE user_id = ? ORDER BY created_at DESC", userID)
+	err := config.DB.Select(&emails, "SELECT id, user_id, sender, subject, body, `timestamp`, created_at, updated_at FROM emails WHERE user_id = ? ORDER BY created_at DESC", userID)
 	if err != nil {
+		fmt.Println("ERROR", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
