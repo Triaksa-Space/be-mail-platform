@@ -11,6 +11,12 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+func DeductEmailLimit(userID int64) error {
+	// Increment counter
+	_, err := config.DB.Exec(`UPDATE users SET sent_emails = sent_emails - 1, last_login = NOW() WHERE id = ?`, userID)
+	return err
+}
+
 func CheckEmailLimit(userID int64) error {
 	var user user.User
 	err := config.DB.Get(&user, `
@@ -135,8 +141,8 @@ func SendEmailHandler(c echo.Context) error {
 
 	result, err := tx.Exec(`
         INSERT INTO emails (user_id, email_type, sender_email, sender_name, subject, body, timestamp, created_at, updated_at) 
-        VALUES (?, "sent", ?, ?, ?, NOW(), NOW(), NOW())`,
-		userID, userEmail, req.Subject, req.Body)
+        VALUES (?, "sent", ?, ?, ?, ?, NOW(), NOW(), NOW())`,
+		userID, userEmail, "", req.Subject, req.Body)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to save email",
@@ -145,6 +151,8 @@ func SendEmailHandler(c echo.Context) error {
 
 	_, err = result.LastInsertId()
 	if err != nil {
+		// DEDUCT COUNT SENT EMAIL
+		DeductEmailLimit(userID)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to get email ID",
 		})
@@ -164,6 +172,8 @@ func SendEmailHandler(c echo.Context) error {
 	// }
 
 	if err := tx.Commit(); err != nil {
+		// DEDUCT COUNT SENT EMAIL
+		DeductEmailLimit(userID)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to commit transaction",
 		})
