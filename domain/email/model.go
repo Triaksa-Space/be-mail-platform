@@ -3,13 +3,14 @@ package email
 import "time"
 
 type Email struct {
-	ID        int64  `db:"id"`
-	UserID    int64  `db:"user_id"`
-	Sender    string `db:"sender"`
-	Subject   string `db:"subject"`
-	Preview   string `db:"preview"`
-	Body      string `db:"body"`
-	EmailType string `db:"email_type"`
+	ID          int64  `db:"id"`
+	UserID      int64  `db:"user_id"`
+	SenderEmail string `db:"sender_email"`
+	SenderName  string `db:"sender_name"`
+	Subject     string `db:"subject"`
+	Preview     string `db:"preview"`
+	Body        string `db:"body"`
+	EmailType   string `db:"email_type"`
 	// Attachments string    `db:"attachments"` // JSON format
 	Timestamp time.Time `db:"timestamp"`
 	CreatedAt time.Time `db:"created_at"`

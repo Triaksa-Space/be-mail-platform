@@ -134,7 +134,7 @@ func SendEmailHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	result, err := tx.Exec(`
-        INSERT INTO emails (user_id, email_type, sender, subject, body, timestamp, created_at, updated_at) 
+        INSERT INTO emails (user_id, email_type, sender_email, sender_name, subject, body, timestamp, created_at, updated_at) 
         VALUES (?, "sent", ?, ?, ?, NOW(), NOW(), NOW())`,
 		userID, userEmail, req.Subject, req.Body)
 	if err != nil {
@@ -182,13 +182,13 @@ func GetEmailHandler(c echo.Context) error {
 	var email Email
 	err := config.DB.Get(&email, `SELECT id, 
             user_id, 
-            sender, 
+            sender_email, sender_name, 
             subject, 
             CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
             body,
             timestamp, 
             created_at, 
-            updated_at  FROM emails WHERE id = ?`, emailID)
+            updated_at  FROM emails WHERE id = ? and email_type = "inbox"`, emailID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
 	}
@@ -205,13 +205,13 @@ func ListEmailsHandler(c echo.Context) error {
 	var emails []Email
 	err := config.DB.Select(&emails, `SELECT id, 
             user_id, 
-            sender, 
+            sender_email, sender_name, 
             subject, 
             CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails ORDER BY created_at DESC`)
+            updated_at FROM emails and email_type = "inbox" ORDER BY created_at DESC`)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
@@ -240,13 +240,13 @@ func ListEmailByIDHandler(c echo.Context) error {
 	var emails []Email
 	err := config.DB.Select(&emails, `SELECT id, 
             user_id, 
-            sender, 
+            sender_email, sender_name, 
             subject, 
             CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails WHERE user_id = ? ORDER BY created_at DESC`, userID)
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}

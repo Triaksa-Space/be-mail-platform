@@ -3,7 +3,8 @@
 CREATE TABLE emails (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL,
-    sender VARCHAR(255) NOT NULL,
+    sender_email VARCHAR(255) NOT NULL,
+    sender_name VARCHAR(255) NOT NULL,
     subject VARCHAR(255),
     body TEXT,
     attachments JSON,
