@@ -179,6 +179,7 @@ func SendEmailHandler(c echo.Context) error {
 		})
 	}
 
+	// TODO: Only ADD COUNT when email successfully
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
