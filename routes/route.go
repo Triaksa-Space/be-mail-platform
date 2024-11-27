@@ -27,6 +27,8 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup := e.Group("/email", middleware.JWTMiddleware)
 	emailGroup.GET("/:id", email.GetEmailHandler)
 	emailGroup.GET("/by_user", email.ListEmailByIDHandler)
+	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
+	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(0))
 	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(0)) // Admin-only
 }
