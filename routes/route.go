@@ -21,6 +21,7 @@ func RegisterRoutes(e *echo.Echo) {
 	userGroup.GET("/:id", user.GetUserHandler, middleware.RoleMiddleware(0))
 	userGroup.GET("/get_user_me", user.GetUserMeHandler)
 	userGroup.GET("/", user.ListUsersHandler, middleware.RoleMiddleware(0))
+	userGroup.GET("/admin", user.ListAdminUsersHandler, middleware.RoleMiddleware(0))
 	userGroup.DELETE("/:id", user.DeleteUserHandler, middleware.RoleMiddleware(0)) // Admin-only
 
 	// Email routes

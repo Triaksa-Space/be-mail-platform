@@ -26,7 +26,10 @@ type CreateUserRequest struct {
 }
 
 type BulkCreateUserRequest struct {
-	Users []CreateUserRequest `json:"users" validate:"required"`
+	Users []struct {
+		Email    string `json:"email" validate:"required,email"`
+		Password string `json:"password" validate:"required,min=6"`
+	} `json:"users" validate:"required,dive"`
 }
 
 type PaginatedUsers struct {

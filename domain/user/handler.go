@@ -19,19 +19,19 @@ type LoginRequest struct {
 func LoginHandler(c echo.Context) error {
 	req := new(LoginRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	var user User
 	err := config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
 	if err != nil || !utils.CheckPasswordHash(req.Password, user.Password) {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
 	}
 
 	token, err := utils.GenerateJWT(user.ID, user.Email)
 	if err != nil {
 		fmt.Println("GenerateJWT", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate token"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Update last login
@@ -52,31 +52,31 @@ func ChangePasswordHandler(c echo.Context) error {
 	// Bind request body
 	req := new(ChangePasswordRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Fetch user data from the database
 	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE role_id = 1 AND id = ?", userID)
+	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Check if the old password is correct
 	if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Old password is incorrect"})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
 	}
 
 	// Hash the new password
 	newHashedPassword, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to hash new password"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Update the user's password in the database
 	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update password"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
@@ -85,7 +85,7 @@ func ChangePasswordHandler(c echo.Context) error {
 func CreateUserHandler(c echo.Context) error {
 	req := new(CreateUserRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// if err := c.Validate(req); err != nil {
@@ -95,7 +95,7 @@ func CreateUserHandler(c echo.Context) error {
 	// Hash the password
 	hashedPassword, err := utils.HashPassword(req.Password)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to hash password"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Insert the user into the database
@@ -104,7 +104,17 @@ func CreateUserHandler(c echo.Context) error {
 		req.Email, hashedPassword, 1, // Hardcoded role ID for now
 	)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create user"})
+		fmt.Println("ERROR", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// Insert into table generated_email
+	_, err = config.DB.Exec(
+		"INSERT INTO generated_emails (username, created_at, updated_at) VALUES (?, NOW(), NOW())",
+		req.Email, // Hardcoded role ID for now
+	)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
@@ -113,7 +123,7 @@ func CreateUserHandler(c echo.Context) error {
 func BulkCreateUserHandler(c echo.Context) error {
 	req := new(BulkCreateUserRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	if len(req.Users) == 0 {
@@ -122,60 +132,83 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 	tx, err := config.DB.Begin()
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
+	defer tx.Rollback()
 
-	// Prepare the insert query
-	stmt, err := tx.Prepare("INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())")
+	// Prepare statements
+	userStmt, err := tx.Prepare(`
+        INSERT INTO users (email, password, role_id, created_at, updated_at) 
+        VALUES (?, ?, 1, NOW(), NOW())
+    `)
 	if err != nil {
-		tx.Rollback()
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to prepare query"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-	defer stmt.Close()
+	defer userStmt.Close()
+
+	emailStmt, err := tx.Prepare(`
+        INSERT INTO generated_emails (username, created_at, updated_at) 
+        VALUES (?, NOW(), NOW())
+    `)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	defer emailStmt.Close()
 
 	for _, user := range req.Users {
-		// Validate each user
-		if user.Email == "" || user.Password == "" || user.RoleID == 0 {
-			tx.Rollback()
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user data"})
-		}
-
-		// Hash the password
 		hashedPassword, err := utils.HashPassword(user.Password)
 		if err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to hash password"})
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		// Insert user into the database
-		_, err = stmt.Exec(user.Email, hashedPassword, user.RoleID)
+		// Insert user
+		_, err = userStmt.Exec(user.Email, hashedPassword)
 		if err != nil {
-			tx.Rollback()
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to insert user"})
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+
+		// Insert generated email
+		_, err = emailStmt.Exec(user.Email)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	return c.JSON(http.StatusCreated, map[string]string{"message": "Users created successfully"})
+	return c.JSON(http.StatusCreated, map[string]string{
+		"message": fmt.Sprintf("%d users created successfully", len(req.Users)),
+	})
 }
 
 // ONLY ADMIN CAN DELETE USER
 func DeleteUserHandler(c echo.Context) error {
 	userID := c.Param("id")
 
-	// Delete the user from the database
-	result, err := config.DB.Exec("DELETE FROM users WHERE role_id = 0 AND id = ?", userID)
+	// Delete the email first from the database
+	resultEmail, err := config.DB.Exec("DELETE FROM emails WHERE user_id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
+		fmt.Println("err email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	rowsEmailAffected, err := resultEmail.RowsAffected()
+	if err != nil || rowsEmailAffected == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+	}
+
+	// Delete the user from the database
+	result, err := config.DB.Exec("DELETE FROM users WHERE role_id = 1 AND id = ?", userID)
+	if err != nil {
+		fmt.Println("err user", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "User deleted successfully"})
@@ -188,7 +221,7 @@ func GetUserHandler(c echo.Context) error {
 	var user User
 	err := config.DB.Get(&user, "SELECT * FROM users WHERE role_id = 1 AND id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, user)
@@ -200,12 +233,34 @@ func GetUserMeHandler(c echo.Context) error {
 
 	// Fetch user details by ID
 	var user User
-	err := config.DB.Get(&user, "SELECT * FROM users WHERE role_id = 1 AND id = ?", userID)
+	err := config.DB.Get(&user, "SELECT * FROM users WHERE id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, user)
+}
+
+func ListAdminUsersHandler(c echo.Context) error {
+	searchUsername := c.QueryParam("username")
+	// Fetch paginated users
+	var users []User
+	query := "SELECT * FROM users WHERE role_id = 0 "
+	if searchUsername != "" {
+		query = query + " AND email LIKE '%" + searchUsername + "%' "
+	}
+	query = query + " ORDER BY last_login DESC"
+	err := config.DB.Select(&users,
+		query)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	response := PaginatedUsers{
+		Users: users,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 func ListUsersHandler(c echo.Context) error {
@@ -229,7 +284,7 @@ func ListUsersHandler(c echo.Context) error {
 	var totalCount int
 	err := config.DB.Get(&totalCount, "SELECT COUNT(*) FROM users WHERE role_id = 1")
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to count users"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Fetch paginated users
@@ -243,7 +298,7 @@ func ListUsersHandler(c echo.Context) error {
 		query,
 		pageSize, offset)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch users"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Calculate total pages

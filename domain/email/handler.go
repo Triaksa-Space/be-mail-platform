@@ -159,8 +159,8 @@ func SendEmailHandler(c echo.Context) error {
 
 	_, err = result.LastInsertId()
 	if err != nil {
-		// DEDUCT COUNT SENT EMAIL
-		DeductEmailLimit(userID)
+		// // DEDUCT COUNT SENT EMAIL
+		// DeductEmailLimit(userID)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to get email ID",
 		})
@@ -180,8 +180,8 @@ func SendEmailHandler(c echo.Context) error {
 	// }
 
 	if err := tx.Commit(); err != nil {
-		// DEDUCT COUNT SENT EMAIL
-		DeductEmailLimit(userID)
+		// // DEDUCT COUNT SENT EMAIL
+		// DeductEmailLimit(userID)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to commit transaction",
 		})
