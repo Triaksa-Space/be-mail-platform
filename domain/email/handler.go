@@ -28,7 +28,7 @@ func CheckEmailLimit(userID int64) error {
 	}
 
 	// Reset counter if 24h passed
-	if time.Since(user.LastEmailTime) > 24*time.Hour {
+	if time.Since(*user.LastEmailTime) > 24*time.Hour {
 		_, err := config.DB.Exec(`
             UPDATE users 
             SET sent_emails = 0, 
@@ -68,6 +68,14 @@ func SendEmailHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Invalid request payload",
 		})
+	}
+
+	attachmentsStr := ""
+
+	for _, attachment := range req.Attachments {
+		// 	fmt.Println("Attachment Name:", attachment.Name)
+		// 	fmt.Println("Attachment Content:", attachment.Content)
+		attachmentsStr = attachmentsStr + "," + attachment.Name + ","
 	}
 
 	// // Initialize AWS session
@@ -140,9 +148,9 @@ func SendEmailHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	result, err := tx.Exec(`
-        INSERT INTO emails (user_id, email_type, sender_email, sender_name, subject, body, timestamp, created_at, updated_at) 
-        VALUES (?, "sent", ?, ?, ?, ?, NOW(), NOW(), NOW())`,
-		userID, userEmail, "", req.Subject, req.Body)
+        INSERT INTO emails (user_id, email_type, sender_email, sender_name, subject, body, attachments, timestamp, created_at, updated_at) 
+        VALUES (?, "sent", ?, ?, ?, ?, ?, NOW(), NOW(), NOW())`,
+		userID, userEmail, "", req.Subject, req.Body, attachmentsStr)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to save email",
@@ -222,7 +230,7 @@ func ListEmailsHandler(c echo.Context) error {
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails and email_type = "inbox" ORDER BY created_at DESC`)
+            updated_at FROM emails and email_type = "inbox" ORDER BY timestamp DESC`)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
@@ -245,7 +253,7 @@ func SentEmailByIDHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, user)
 }
 
-func ListEmailByIDHandler(c echo.Context) error {
+func ListEmailByTokenHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 
 	var emails []Email
@@ -257,7 +265,35 @@ func ListEmailByIDHandler(c echo.Context) error {
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY created_at DESC`, userID)
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
+	}
+
+	response := make([]EmailResponse, len(emails))
+	for i, email := range emails {
+		response[i] = EmailResponse{
+			Email:        email,
+			RelativeTime: formatRelativeTime(email.Timestamp),
+		}
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+func ListEmailByIDHandler(c echo.Context) error {
+	userID := c.Param("id")
+
+	var emails []Email
+	err := config.DB.Select(&emails, `SELECT id, 
+            user_id, 
+            sender_email, sender_name, 
+            subject, 
+            CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
+            body,
+            timestamp, 
+            created_at, 
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}

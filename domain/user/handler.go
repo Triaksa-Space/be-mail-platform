@@ -5,6 +5,7 @@ import (
 	"email-platform/utils"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -56,7 +57,7 @@ func ChangePasswordHandler(c echo.Context) error {
 
 	// Fetch user data from the database
 	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", userID)
+	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE role_id = 1 AND id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "User not found"})
 	}
@@ -125,7 +126,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 	}
 
 	// Prepare the insert query
-	stmt, err := tx.Prepare("INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())")
+	stmt, err := tx.Prepare("INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())")
 	if err != nil {
 		tx.Rollback()
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to prepare query"})
@@ -162,11 +163,12 @@ func BulkCreateUserHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, map[string]string{"message": "Users created successfully"})
 }
 
+// ONLY ADMIN CAN DELETE USER
 func DeleteUserHandler(c echo.Context) error {
 	userID := c.Param("id")
 
 	// Delete the user from the database
-	result, err := config.DB.Exec("DELETE FROM users WHERE id = ?", userID)
+	result, err := config.DB.Exec("DELETE FROM users WHERE role_id = 0 AND id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
 	}
@@ -184,7 +186,7 @@ func GetUserHandler(c echo.Context) error {
 
 	// Fetch user details by ID
 	var user User
-	err := config.DB.Get(&user, "SELECT * FROM users WHERE id = ?", userID)
+	err := config.DB.Get(&user, "SELECT * FROM users WHERE role_id = 1 AND id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
@@ -198,7 +200,7 @@ func GetUserMeHandler(c echo.Context) error {
 
 	// Fetch user details by ID
 	var user User
-	err := config.DB.Get(&user, "SELECT * FROM users WHERE id = ?", userID)
+	err := config.DB.Get(&user, "SELECT * FROM users WHERE role_id = 1 AND id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
@@ -207,12 +209,53 @@ func GetUserMeHandler(c echo.Context) error {
 }
 
 func ListUsersHandler(c echo.Context) error {
-	// Fetch all users
+	// Get pagination parameters
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
+	searchEmail := c.QueryParam("email")
+
+	// Set defaults
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10 // Default page size
+	}
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get total count
+	var totalCount int
+	err := config.DB.Get(&totalCount, "SELECT COUNT(*) FROM users WHERE role_id = 1")
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to count users"})
+	}
+
+	// Fetch paginated users
 	var users []User
-	err := config.DB.Select(&users, "SELECT * FROM users ORDER BY last_login DESC")
+	query := "SELECT * FROM users WHERE role_id = 1 "
+	if searchEmail != "" {
+		query = query + " AND email LIKE '%" + searchEmail + "%' "
+	}
+	query = query + " ORDER BY last_login DESC LIMIT ? OFFSET ?"
+	err = config.DB.Select(&users,
+		query,
+		pageSize, offset)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch users"})
 	}
 
-	return c.JSON(http.StatusOK, users)
+	// Calculate total pages
+	totalPages := (totalCount + pageSize - 1) / pageSize
+
+	response := PaginatedUsers{
+		Users:      users,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }

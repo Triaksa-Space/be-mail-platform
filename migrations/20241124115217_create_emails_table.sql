@@ -7,7 +7,7 @@ CREATE TABLE emails (
     sender_name VARCHAR(255) NOT NULL,
     subject VARCHAR(255),
     body TEXT,
-    attachments JSON,
+    attachments VARCHAR(255) NULL,
     timestamp DATETIME NOT NULL,
     email_type VARCHAR(255) NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

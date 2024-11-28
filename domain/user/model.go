@@ -3,15 +3,15 @@ package user
 import "time"
 
 type User struct {
-	ID            int64     `db:"id"`
-	Email         string    `db:"email"`
-	Password      string    `db:"password"`
-	RoleID        int       `db:"role_id"`
-	LastLogin     time.Time `db:"last_login"`
-	SentEmails    int       `db:"sent_emails"`
-	LastEmailTime time.Time `db:"last_email_time"`
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
+	ID            int64      `db:"id"`
+	Email         string     `db:"email"`
+	Password      string     `db:"password"`
+	RoleID        int        `db:"role_id"`
+	LastLogin     *time.Time `db:"last_login"`
+	SentEmails    int        `db:"sent_emails"`
+	LastEmailTime *time.Time `db:"last_email_time"`
+	CreatedAt     time.Time  `db:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at"`
 }
 
 type ChangePasswordRequest struct {
@@ -27,4 +27,12 @@ type CreateUserRequest struct {
 
 type BulkCreateUserRequest struct {
 	Users []CreateUserRequest `json:"users" validate:"required"`
+}
+
+type PaginatedUsers struct {
+	Users      []User `json:"users"`
+	TotalCount int    `json:"total_count"`
+	Page       int    `json:"page"`
+	PageSize   int    `json:"page_size"`
+	TotalPages int    `json:"total_pages"`
 }
