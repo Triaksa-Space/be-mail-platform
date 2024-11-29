@@ -155,7 +155,9 @@ func BulkCreateUserHandler(c echo.Context) error {
 	}
 	defer emailStmt.Close()
 
-	for _, user := range req.Users {
+	createdUsers := []map[string]string{}
+
+	for i, user := range req.Users {
 		hashedPassword, err := utils.HashPassword(user.Password)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -172,14 +174,22 @@ func BulkCreateUserHandler(c echo.Context) error {
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
+
+		// Collect created user data
+		createdUsers = append(createdUsers, map[string]string{
+			"No":       fmt.Sprintf("%d", i+1),
+			"Email":    user.Email,
+			"Password": user.Password,
+		})
 	}
 
 	if err := tx.Commit(); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	return c.JSON(http.StatusCreated, map[string]string{
+	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"message": fmt.Sprintf("%d users created successfully", len(req.Users)),
+		"users":   createdUsers,
 	})
 }
 
