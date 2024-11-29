@@ -19,3 +19,27 @@ func GetDropdownDomainHandler(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, domains)
 }
+
+func CreateDomainHandler(c echo.Context) error {
+	req := new(CreateDomainRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+	}
+
+	// Validate the request
+	if err := c.Validate(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
+	// Insert the domain into the database
+	_, err := config.DB.Exec(
+		"INSERT INTO domains (domain, created_at, updated_at) VALUES (?, NOW(), NOW())",
+		req.Domain,
+	)
+	if err != nil {
+		fmt.Println("Error inserting domain:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to insert domain"})
+	}
+
+	return c.JSON(http.StatusCreated, map[string]string{"message": "Domain created successfully"})
+}
