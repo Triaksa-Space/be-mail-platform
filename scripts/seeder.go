@@ -2,6 +2,7 @@ package main
 
 import (
 	"email-platform/config"
+	domain "email-platform/domain/domain_email"
 	"email-platform/domain/email"
 	"email-platform/domain/user"
 	"email-platform/utils"
@@ -13,6 +14,34 @@ import (
 func main() {
 	config.InitConfig()
 	config.InitDB()
+
+	// Seed Domain
+	domains := generateDomains()
+
+	for _, domain := range domains {
+		// Check if domain exists
+		var exists bool
+		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM domains WHERE domain = ?)", domain.Domain)
+		if err != nil {
+			log.Fatalf("Failed to check existing domain %s: %v", domain.Domain, err)
+		}
+
+		if exists {
+			log.Printf("Skipping existing domain: %s", domain.Domain)
+			continue
+		}
+
+		_, err = config.DB.Exec(
+			"INSERT INTO domains (domain, created_at, updated_at) VALUES (?, NOW(), NOW())",
+			domain.Domain,
+		)
+		if err != nil {
+			log.Fatalf("Failed to seed domain %s: %v", domain.Domain, err)
+		}
+		log.Printf("Seeded domain: %s", domain.Domain)
+	}
+
+	log.Println("Domain seeding completed!")
 
 	// Seed users
 	users := generateUsers(300)
@@ -87,6 +116,22 @@ func parseDate(dateStr string) time.Time {
 		log.Fatalf("Failed to parse date %s: %v", dateStr, err)
 	}
 	return t
+}
+
+func generateDomains() []domain.DomainEmail {
+	domains := []domain.DomainEmail{
+		{Domain: "mailria.com"},
+		// {Domain: "gmail.com"},
+		// {Domain: "yahoo.com"},
+		// {Domain: "outlook.com"},
+		// {Domain: "hotmail.com"},
+		// {Domain: "aol.com"},
+		// {Domain: "protonmail.com"},
+		// {Domain: "icloud.com"},
+		// {Domain: "zoho.com"},
+		// {Domain: "yandex.com"},
+	}
+	return domains
 }
 
 func generateUsers(count int) []user.User {

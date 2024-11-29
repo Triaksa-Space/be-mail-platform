@@ -1,6 +1,7 @@
 package routes
 
 import (
+	domain "email-platform/domain/domain_email"
 	"email-platform/domain/email"
 	"email-platform/domain/user"
 	"email-platform/middleware"
@@ -12,6 +13,9 @@ func RegisterRoutes(e *echo.Echo) {
 	// User routes
 	e.POST("/login", user.LoginHandler)
 	e.POST("/logout", user.LogoutHandler, middleware.JWTMiddleware)
+
+	domainGroup := e.Group("/domain", middleware.JWTMiddleware)
+	domainGroup.GET("/dropdown", domain.GetDropdownDomainHandler, middleware.RoleMiddleware(0)) // Admin-only
 
 	userGroup := e.Group("/user")
 	userGroup.Use(middleware.JWTMiddleware)
