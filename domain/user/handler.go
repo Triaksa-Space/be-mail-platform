@@ -2,6 +2,7 @@ package user
 
 import (
 	"email-platform/config"
+	"email-platform/pkg"
 	"email-platform/utils"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/spf13/viper"
 )
 
 type LoginRequest struct {
@@ -117,6 +119,17 @@ func CreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
+	// Initialize AWS session
+	sess, _ := pkg.InitAWS()
+
+	// Create S3 client
+	s3Client, _ := pkg.InitS3(sess)
+
+	err = pkg.CreateBucketFolderEmailUser(s3Client, req.Email)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
 }
 
@@ -130,49 +143,66 @@ func BulkCreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "No users provided"})
 	}
 
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
-	defer tx.Rollback()
-
-	// Prepare statements
-	userStmt, err := tx.Prepare(`
-        INSERT INTO users (email, password, role_id, created_at, updated_at) 
-        VALUES (?, ?, 1, NOW(), NOW())
-    `)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
-	defer userStmt.Close()
-
-	emailStmt, err := tx.Prepare(`
-        INSERT INTO generated_emails (username, created_at, updated_at) 
-        VALUES (?, NOW(), NOW())
-    `)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
-	defer emailStmt.Close()
-
 	createdUsers := []map[string]string{}
+	skippedUsers := []map[string]string{}
 
 	for i, user := range req.Users {
+		// Check if user exists
+		var exists bool
+		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", user.Email)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+
+		if exists {
+			skippedUsers = append(skippedUsers, map[string]string{
+				"No":    fmt.Sprintf("%d", i+1),
+				"Email": user.Email,
+			})
+			continue
+		}
+
+		// Start transaction for this user
+		tx, err := config.DB.Begin()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		defer tx.Rollback()
+
 		hashedPassword, err := utils.HashPassword(user.Password)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
 		// Insert user
-		_, err = userStmt.Exec(user.Email, hashedPassword)
+		_, err = tx.Exec(
+			"INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())",
+			user.Email, hashedPassword,
+		)
 		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			continue
 		}
 
 		// Insert generated email
-		_, err = emailStmt.Exec(user.Email)
+		_, err = tx.Exec(
+			"INSERT INTO generated_emails (username, created_at, updated_at) VALUES (?, NOW(), NOW())",
+			user.Email,
+		)
 		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			continue
+		}
+
+		// Initialize AWS session and create S3 folder
+		sess, _ := pkg.InitAWS()
+		s3Client, _ := pkg.InitS3(sess)
+		err = pkg.CreateBucketFolderEmailUser(s3Client, user.Email)
+		if err != nil {
+			continue
+		}
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			continue
 		}
 
 		// Collect created user data
@@ -183,13 +213,10 @@ func BulkCreateUserHandler(c echo.Context) error {
 		})
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
-
 	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"message": fmt.Sprintf("%d users created successfully", len(req.Users)),
-		"users":   createdUsers,
+		"message":       fmt.Sprintf("%d users created successfully", len(createdUsers)),
+		"created_users": createdUsers,
+		"skipped_users": skippedUsers,
 	})
 }
 
@@ -197,31 +224,58 @@ func BulkCreateUserHandler(c echo.Context) error {
 func DeleteUserHandler(c echo.Context) error {
 	userID := c.Param("id")
 
-	// Delete the email first from the database
-	resultEmail, err := config.DB.Exec("DELETE FROM emails WHERE user_id = ?", userID)
+	// Get user email before deletion for S3
+	var userEmail string
+	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ? AND role_id = 1", userID)
 	if err != nil {
-		fmt.Println("err email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
 
-	rowsEmailAffected, err := resultEmail.RowsAffected()
-	if err != nil || rowsEmailAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
-	}
-
-	// Delete the user from the database
-	result, err := config.DB.Exec("DELETE FROM users WHERE role_id = 1 AND id = ?", userID)
+	// Start transaction
+	tx, err := config.DB.Begin()
 	if err != nil {
-		fmt.Println("err user", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+	}
+	defer tx.Rollback()
+
+	// Delete emails
+	_, err = tx.Exec("DELETE FROM emails WHERE user_id = ?", userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete emails"})
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil || rowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+	// Delete user
+	result, err := tx.Exec("DELETE FROM users WHERE id = ? AND role_id = 1", userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "User deleted successfully"})
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+	}
+
+	// Initialize AWS session
+	sess, _ := pkg.InitAWS()
+	s3Client, _ := pkg.InitS3(sess)
+
+	// Delete S3 folder
+	bucketName := viper.GetString("S3_BUCKET_NAME")
+	prefix := fmt.Sprintf("%s/", userEmail)
+
+	// List and delete all objects with the user's prefix
+	err = pkg.DeleteS3FolderContents(s3Client, bucketName, prefix)
+	if err != nil {
+		fmt.Println("Failed to delete S3 folder:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user files"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully"})
 }
 
 func GetUserHandler(c echo.Context) error {

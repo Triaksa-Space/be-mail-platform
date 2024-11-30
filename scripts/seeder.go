@@ -44,7 +44,7 @@ func main() {
 	log.Println("Domain seeding completed!")
 
 	// Seed users
-	users := generateUsers(300)
+	users := generateUsers(5)
 
 	for _, user := range users {
 		// Check if user exists
@@ -75,7 +75,7 @@ func main() {
 	}
 
 	// Seed emails
-	emails := generateEmails(300, 10)
+	emails := generateEmails(5, 10)
 
 	for _, email := range emails {
 		// Check if email exists

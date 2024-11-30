@@ -1,16 +1,24 @@
 package email
 
 import (
+	"bytes"
 	"email-platform/config"
 	"email-platform/domain/user"
+	"email-platform/pkg"
 	"errors"
 	"fmt"
+	"html"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/mail"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -80,20 +88,11 @@ func SendEmailHandler(c echo.Context) error {
 	for _, attachment := range req.Attachments {
 		// 	fmt.Println("Attachment Name:", attachment.Name)
 		// 	fmt.Println("Attachment Content:", attachment.Content)
-		attachmentsStr = attachmentsStr + "," + attachment.Name + ","
+		attachmentsStr = attachmentsStr + "," + attachment.Filename + ","
 	}
 
 	// Initialize AWS session
-	sess, err := session.NewSession(&aws.Config{
-		Region:      aws.String(viper.GetString("AWS_REGION")),
-		Credentials: credentials.NewStaticCredentials(viper.GetString("AWS_ACCESS_KEY"), viper.GetString("AWS_SECRET_KEY"), ""),
-	})
-	if err != nil {
-		fmt.Println("Failed to initialize AWS session", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to initialize AWS session",
-		})
-	}
+	sess, _ := pkg.InitAWS()
 
 	// // Upload attachments to S3
 	// var attachmentURLs []string
@@ -139,7 +138,7 @@ func SendEmailHandler(c echo.Context) error {
 		Source: aws.String(userEmail),
 	}
 
-	_, err = sesClient.SendEmail(input)
+	_, err := sesClient.SendEmail(input)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -358,5 +357,349 @@ func formatRelativeTime(t time.Time) string {
 		return "Yesterday"
 	default:
 		return t.Format("02 Jan 2006")
+	}
+}
+
+func GetInboxHandler(c echo.Context) error {
+	// // Extract user email from context (assuming middleware sets this)
+	// userEmail := c.Get("user_email").(string)
+
+	// AWS S3 configuration
+	bucketName := viper.GetString("S3_BUCKET_NAME") // e.g., "ses-mailsaja-received"
+	prefix := viper.GetString("S3_PREFIX")          // e.g., "mailsaja@inbox-all/" mailsaja@inbox-all/
+
+	// Initialize AWS session
+	sess, _ := pkg.InitAWS()
+
+	// Create S3 client
+	s3Client := s3.New(sess)
+
+	// List objects in S3 bucket under the user's prefix
+	listInput := &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucketName),
+		Prefix: aws.String(prefix),
+	}
+
+	var emails []ParsedEmail
+
+	err := s3Client.ListObjectsV2Pages(listInput, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+		for _, obj := range page.Contents {
+			// Get the object (email)
+			getInput := &s3.GetObjectInput{
+				Bucket: aws.String(bucketName),
+				Key:    obj.Key,
+			}
+			getOutput, err := s3Client.GetObject(getInput)
+			if err != nil {
+				fmt.Println("Failed to get object:", err)
+				continue
+			}
+			defer getOutput.Body.Close()
+
+			// Read the object content
+			buf := new(bytes.Buffer)
+			_, err = io.Copy(buf, getOutput.Body)
+			if err != nil {
+				fmt.Println("Failed to read object content:", err)
+				continue
+			}
+
+			// Parse the email
+			emailContent := buf.String()
+			msg, err := mail.ReadMessage(strings.NewReader(emailContent))
+			if err != nil {
+				fmt.Println("Failed to parse email:", err)
+				continue
+			}
+
+			fmt.Println("msg", msg.Header)
+
+			parsedEmail, err := parseEmailFromBucket(msg)
+			if err != nil {
+				fmt.Printf("Failed to parse email: %v\n", err)
+				continue
+			}
+
+			// Use the parsed email
+			// fmt.Printf("From: %s\nSubject: %s\nDate: %s\n",
+			// 	parsedEmail.From,
+			// 	parsedEmail.Subject,
+			// 	parsedEmail.Date.Format(time.RFC3339))
+			// 	parsedEmail.MessageID
+			// // Extract email fields
+			// parsedEmail := ParsedEmail{
+			// 	Subject: msg.Header.Get("Subject"),
+			// 	From:    msg.Header.Get("From"),
+			// 	Date:    msg.Header.Get("Date"),
+			// 	To:      msg.Header.Get("To"),
+			// 	Body:    "",
+			// }
+
+			// Read the body
+			// bodyBytes, err := io.ReadAll(msg.Body)
+			// if err != nil {
+			// 	fmt.Println("Failed to read email body:", err)
+			// }
+			// parsedEmail.Body = string(bodyBytes)
+
+			emails = append(emails, *parsedEmail)
+		}
+		return !lastPage
+	})
+	if err != nil {
+		fmt.Println("Failed to list objects:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to retrieve emails",
+		})
+	}
+
+	return c.JSON(http.StatusOK, emails)
+}
+
+func SyncBucketInboxHandler(c echo.Context) error {
+	userEmail := c.Get("user_email").(string)
+	userID := c.Get("user_id").(int64)
+
+	// AWS S3 configuration
+	bucketName := viper.GetString("S3_BUCKET_NAME")
+	prefix := fmt.Sprintf("%s/", userEmail)
+
+	// Initialize AWS session
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(viper.GetString("AWS_REGION")),
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to initialize AWS"})
+	}
+
+	// Create S3 client
+	s3Client := s3.New(sess)
+
+	stats := SyncStats{}
+
+	// List objects in S3 bucket
+	err = s3Client.ListObjectsV2Pages(&s3.ListObjectsV2Input{
+		Bucket: aws.String(bucketName),
+		Prefix: aws.String(prefix),
+	}, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+		for _, obj := range page.Contents {
+			stats.TotalEmails++
+
+			// Check if email already exists
+			var exists bool
+			err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM emails WHERE message_id = ?)", *obj.Key)
+			if err != nil {
+				fmt.Printf("Error checking email existence: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+
+			if exists {
+				stats.SkippedEmails++
+				continue
+			}
+
+			// Get the email object
+			output, err := s3Client.GetObject(&s3.GetObjectInput{
+				Bucket: aws.String(bucketName),
+				Key:    obj.Key,
+			})
+			if err != nil {
+				fmt.Printf("Failed to get object: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+			defer output.Body.Close()
+
+			// Read email content
+			buf := new(bytes.Buffer)
+			if _, err := io.Copy(buf, output.Body); err != nil {
+				fmt.Printf("Failed to read email: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+
+			// Parse email
+			msg, err := mail.ReadMessage(strings.NewReader(buf.String()))
+			if err != nil {
+				fmt.Printf("Failed to parse email: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+
+			// Read body
+			body, err := io.ReadAll(msg.Body)
+			if err != nil {
+				fmt.Printf("Failed to read body: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+
+			// Start transaction
+			tx, err := config.DB.Begin()
+			if err != nil {
+				stats.FailedEmails++
+				continue
+			}
+			defer tx.Rollback()
+
+			// Insert email
+			_, err = tx.Exec(`
+                INSERT INTO emails (
+                    user_id, message_id, subject, sender, recipient,
+                    body, received_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+            `,
+				userID,
+				*obj.Key,
+				msg.Header.Get("Subject"),
+				msg.Header.Get("From"),
+				msg.Header.Get("To"),
+				string(body),
+				output.LastModified,
+			)
+			if err != nil {
+				fmt.Printf("Failed to insert email: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+
+			if err := tx.Commit(); err != nil {
+				fmt.Printf("Failed to commit transaction: %v\n", err)
+				stats.FailedEmails++
+				continue
+			}
+
+			stats.NewEmails++
+		}
+		return !lastPage
+	})
+
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to list objects"})
+	}
+
+	return c.JSON(http.StatusOK, stats)
+}
+
+func parseEmailFromBucket(msg *mail.Message) (*ParsedEmail, error) {
+	parsed := &ParsedEmail{
+		MessageID: msg.Header.Get("Message-Id"),
+		Subject:   msg.Header.Get("Subject"),
+		From:      msg.Header.Get("From"),
+		To:        msg.Header.Get("To"),
+	}
+
+	if dateStr := msg.Header.Get("Date"); dateStr != "" {
+		if parsedDate, err := time.Parse(time.RFC1123Z, dateStr); err == nil {
+			parsed.Date = parsedDate
+		}
+	}
+
+	contentType := msg.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/") {
+		_, params, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse content type: %v", err)
+		}
+
+		mr := multipart.NewReader(msg.Body, params["boundary"])
+		var htmlBody, plainBody string
+
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				continue
+			}
+
+			content, err := io.ReadAll(part)
+			if err != nil {
+				continue
+			}
+
+			partType, params, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
+			if err != nil {
+				continue
+			}
+
+			disposition, _, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+			isAttachment := err == nil && (disposition == "attachment" || part.FileName() != "")
+
+			switch {
+			case isAttachment:
+				attachment := Attachment{
+					Filename:    part.FileName(),
+					ContentType: partType,
+					Size:        int64(len(content)),
+					Content:     content,
+				}
+				parsed.Attachments = append(parsed.Attachments, attachment)
+			case strings.HasPrefix(partType, "multipart/"):
+				// Handle nested multipart
+				nestedMR := multipart.NewReader(bytes.NewReader(content), params["boundary"])
+				handleNestedParts(nestedMR, parsed)
+			case strings.HasPrefix(partType, "text/html"):
+				htmlBody = string(content)
+			case strings.HasPrefix(partType, "text/plain"):
+				plainBody = string(content)
+			}
+		}
+
+		// Prioritize HTML body if available
+		if htmlBody != "" {
+			parsed.Body = htmlBody
+			parsed.PlainText = plainBody
+		} else if plainBody != "" {
+			parsed.PlainText = plainBody
+			parsed.Body = textToHTML(plainBody)
+		}
+	} else {
+		// Handle single part message
+		body, err := io.ReadAll(msg.Body)
+		if err == nil {
+			if strings.HasPrefix(contentType, "text/html") {
+				parsed.Body = string(body)
+			} else {
+				parsed.PlainText = string(body)
+				parsed.Body = textToHTML(string(body))
+			}
+		}
+	}
+
+	return parsed, nil
+}
+
+func textToHTML(text string) string {
+	// Convert plain text to HTML
+	text = html.EscapeString(text)
+	text = strings.ReplaceAll(text, "\n", "<br>")
+	return fmt.Sprintf("<div style=\"font-family: Arial, sans-serif;\">%s</div>", text)
+}
+
+func handleNestedParts(mr *multipart.Reader, parsed *ParsedEmail) {
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		content, err := io.ReadAll(part)
+		if err != nil {
+			continue
+		}
+
+		partType := part.Header.Get("Content-Type")
+		switch {
+		case strings.HasPrefix(partType, "text/html"):
+			parsed.Body = string(content)
+		case strings.HasPrefix(partType, "text/plain"):
+			parsed.PlainText = string(content)
+		}
 	}
 }

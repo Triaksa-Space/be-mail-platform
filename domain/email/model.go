@@ -25,14 +25,33 @@ type SendEmailRequest struct {
 	Attachments []Attachment `json:"attachments"`
 }
 
-type Attachment struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Content string `json:"content"`
-}
-
 // Convert timestamps to relative time
 type EmailResponse struct {
 	Email
 	RelativeTime string `json:"RelativeTime"`
+}
+
+type Attachment struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	Content     []byte `json:"content"` // Raw content, not included in JSON
+}
+
+type ParsedEmail struct {
+	MessageID   string       `json:"message_id"`
+	Subject     string       `json:"subject"`
+	From        string       `json:"from"`
+	To          string       `json:"to"`
+	Date        time.Time    `json:"date"`
+	Body        string       `json:"body"`      // HTML formatted body
+	PlainText   string       `json:"plaintext"` // Original plain text
+	Attachments []Attachment `json:"attachments"`
+}
+
+type SyncStats struct {
+	TotalEmails   int `json:"total_emails"`
+	NewEmails     int `json:"new_emails"`
+	SkippedEmails int `json:"skipped_emails"`
+	FailedEmails  int `json:"failed_emails"`
 }
