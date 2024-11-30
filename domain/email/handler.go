@@ -214,6 +214,8 @@ func GetEmailHandler(c echo.Context) error {
             subject, 
             CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
             body,
+			message_id,
+			attachments,
             timestamp, 
             created_at, 
             updated_at  FROM emails WHERE id = ? and email_type = "inbox"`, emailID)
@@ -224,6 +226,7 @@ func GetEmailHandler(c echo.Context) error {
 	var emailResp EmailResponse
 	emailResp.Email = email
 	emailResp.RelativeTime = formatRelativeTime(email.Timestamp)
+	emailResp.ListAttachments = getAttachmentURLs(email.Attachments)
 
 	return c.JSON(http.StatusOK, emailResp)
 }
@@ -300,7 +303,9 @@ func ListEmailByIDHandler(c echo.Context) error {
             subject, 
             CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
             body,
-            timestamp, 
+            timestamp,
+			message_id,
+			attachments, 
             created_at, 
             updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
 	if err != nil {
@@ -313,9 +318,20 @@ func ListEmailByIDHandler(c echo.Context) error {
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
 		}
+		// Convert JSON string to []string
+		response[i].ListAttachments = getAttachmentURLs(email.Attachments)
 	}
 
 	return c.JSON(http.StatusOK, response)
+}
+
+func getAttachmentURLs(attachmentsJSON string) []string {
+	var urls []string
+	if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
+		fmt.Printf("Failed to unmarshal attachments: %v\n", err)
+		return []string{}
+	}
+	return urls
 }
 
 func DeleteEmailHandler(c echo.Context) error {
@@ -436,12 +452,12 @@ func GetInboxHandler(c echo.Context) error {
 }
 
 func SyncBucketInboxHandler(c echo.Context) error {
-	userEmail := c.Get("user_email").(string)
+	// userEmail := c.Get("user_email").(string)
 	userID := c.Get("user_id").(int64)
 
 	// AWS S3 configuration
 	bucketName := viper.GetString("S3_BUCKET_NAME")
-	prefix := fmt.Sprintf("%s/", userEmail)
+	prefix := viper.GetString("S3_PREFIX")
 
 	// Initialize AWS session
 	sess, err := pkg.InitAWS()
@@ -454,16 +470,17 @@ func SyncBucketInboxHandler(c echo.Context) error {
 
 	stats := SyncStats{}
 
-	// Fetch existing message IDs
-	var existingMessageIDs []string
-	err = config.DB.Select(&existingMessageIDs, "SELECT message_id FROM emails WHERE user_id = ?", userID)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch existing emails"})
-	}
-	existingMessages := make(map[string]bool)
-	for _, id := range existingMessageIDs {
-		existingMessages[id] = true
-	}
+	// // Fetch existing message IDs
+	// var existingMessageIDs []string
+	// err = config.DB.Select(&existingMessageIDs, "SELECT message_id FROM emails WHERE message_id = ?", id)
+	// if err != nil {
+	// 	fmt.Println("Failed to fetch existing emails:", err)
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch existing emails"})
+	// }
+	// existingMessages := make(map[string]bool)
+	// for _, id := range existingMessageIDs {
+	// 	existingMessages[id] = true
+	// }
 
 	// List objects in S3 bucket
 	err = s3Client.ListObjectsV2Pages(&s3.ListObjectsV2Input{
@@ -478,11 +495,11 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				continue
 			}
 
-			// Check if email already exists
-			if existingMessages[messageID] {
-				stats.SkippedEmails++
-				continue
-			}
+			// // Check if email already exists
+			// if existingMessages[messageID] {
+			// 	stats.SkippedEmails++
+			// 	continue
+			// }
 
 			// Get the email object
 			output, err := s3Client.GetObject(&s3.GetObjectInput{
@@ -523,9 +540,41 @@ func SyncBucketInboxHandler(c echo.Context) error {
 			// Prepare data for insertion
 			senderName, senderEmail := parseEmailAddress(parsedEmail.From)
 			preview := generatePreview(parsedEmail.PlainText, parsedEmail.Body)
-			attachmentsJSON, err := json.Marshal(parsedEmail.Attachments)
+			// attachmentsJSON, err := json.Marshal(parsedEmail.Attachments)
+			// if err != nil {
+			// 	fmt.Printf("Failed to marshal attachments for email %s: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
+			// Upload attachments to S3 and collect their URLs
+			var attachmentURLs []string
+
+			for _, attachment := range parsedEmail.Attachments {
+				// Generate a unique key for the attachment in S3
+				attachmentKey := fmt.Sprintf("attachments/%s/%s", messageID, attachment.Filename)
+
+				// Upload the attachment to S3
+				_, err := s3Client.PutObject(&s3.PutObjectInput{
+					Bucket:      aws.String(bucketName),
+					Key:         aws.String(attachmentKey),
+					Body:        bytes.NewReader(attachment.Content),
+					ContentType: aws.String(attachment.ContentType),
+				})
+				if err != nil {
+					fmt.Printf("Failed to upload attachment %s: %v\n", attachment.Filename, err)
+					stats.FailedEmails++
+					continue
+				}
+
+				// Construct the URL for the uploaded attachment
+				attachmentURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucketName, attachmentKey)
+				attachmentURLs = append(attachmentURLs, attachmentURL)
+			}
+
+			// Serialize the attachment URLs to JSON
+			attachmentsJSON, err := json.Marshal(attachmentURLs)
 			if err != nil {
-				fmt.Printf("Failed to marshal attachments for email %s: %v\n", messageID, err)
+				fmt.Printf("Failed to marshal attachment URLs for email %s: %v\n", messageID, err)
 				stats.FailedEmails++
 				continue
 			}
@@ -553,7 +602,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				parsedEmail.Subject,
 				preview,
 				parsedEmail.Body,
-				"", // Set email_type as needed
+				"inbox", // Set email_type as needed
 				string(attachmentsJSON),
 				parsedEmail.MessageID,
 				parsedEmail.Date,

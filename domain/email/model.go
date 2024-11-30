@@ -29,7 +29,8 @@ type SendEmailRequest struct {
 // Convert timestamps to relative time
 type EmailResponse struct {
 	Email
-	RelativeTime string `json:"RelativeTime"`
+	ListAttachments []string `json:"ListAttachments"`
+	RelativeTime    string   `json:"RelativeTime"`
 }
 
 type Attachment struct {

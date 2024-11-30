@@ -6,6 +6,7 @@ CREATE TABLE emails (
     sender_email VARCHAR(255) NOT NULL,
     sender_name VARCHAR(255) NOT NULL,
     subject VARCHAR(255),
+    preview VARCHAR(255),
     body TEXT,
     attachments VARCHAR(255) NULL,
     timestamp DATETIME NOT NULL,
