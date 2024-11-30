@@ -8,7 +8,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/labstack/echo/v4"
+	"github.com/spf13/viper"
 )
 
 func DeductEmailLimit(userID int64) error {
@@ -78,15 +83,17 @@ func SendEmailHandler(c echo.Context) error {
 		attachmentsStr = attachmentsStr + "," + attachment.Name + ","
 	}
 
-	// // Initialize AWS session
-	// sess, err := session.NewSession(&aws.Config{
-	// 	Region: aws.String(viper.GetString("AWS_REGION")),
-	// })
-	// if err != nil {
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{
-	// 		"error": "Failed to initialize AWS session",
-	// 	})
-	// }
+	// Initialize AWS session
+	sess, err := session.NewSession(&aws.Config{
+		Region:      aws.String(viper.GetString("AWS_REGION")),
+		Credentials: credentials.NewStaticCredentials(viper.GetString("AWS_ACCESS_KEY"), viper.GetString("AWS_SECRET_KEY"), ""),
+	})
+	if err != nil {
+		fmt.Println("Failed to initialize AWS session", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to initialize AWS session",
+		})
+	}
 
 	// // Upload attachments to S3
 	// var attachmentURLs []string
@@ -110,33 +117,35 @@ func SendEmailHandler(c echo.Context) error {
 	// 	}
 	// }
 
-	// // Send email via SES
-	// sesClient := ses.New(sess)
-	// input := &ses.SendEmailInput{
-	// 	Destination: &ses.Destination{
-	// 		ToAddresses: []*string{aws.String(req.To)},
-	// 	},
-	// 	Message: &ses.Message{
-	// 		Body: &ses.Body{
-	// 			Text: &ses.Content{
-	// 				Charset: aws.String("UTF-8"),
-	// 				Data:    aws.String(req.Body),
-	// 			},
-	// 		},
-	// 		Subject: &ses.Content{
-	// 			Charset: aws.String("UTF-8"),
-	// 			Data:    aws.String(req.Subject),
-	// 		},
-	// 	},
-	// 	Source: aws.String(viper.GetString("SES_EMAIL_SOURCE")),
-	// }
+	// Send email via SES
+	sesClient := ses.New(sess)
 
-	// _, err = sesClient.SendEmail(input)
-	// if err != nil {
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{
-	// 		"error": "Failed to send email",
-	// 	})
-	// }
+	input := &ses.SendEmailInput{
+		Destination: &ses.Destination{
+			ToAddresses: []*string{aws.String(req.To)},
+		},
+		Message: &ses.Message{
+			Body: &ses.Body{
+				Text: &ses.Content{
+					Charset: aws.String("UTF-8"),
+					Data:    aws.String(req.Body),
+				},
+			},
+			Subject: &ses.Content{
+				Charset: aws.String("UTF-8"),
+				Data:    aws.String(req.Subject),
+			},
+		},
+		Source: aws.String(userEmail),
+	}
+
+	_, err = sesClient.SendEmail(input)
+	if err != nil {
+		fmt.Println("Failed to send email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to send email",
+		})
+	}
 
 	// Save email to database
 	tx, err := config.DB.Begin()
