@@ -41,5 +41,5 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(0)) // Admin-only
 
 	emailGroup.GET("/bucket/sync", email.SyncBucketInboxHandler, middleware.RoleMiddleware(0)) // Admin-only
-	emailGroup.GET("/bucket/inbox", email.GetInboxHandler, middleware.RoleMiddleware(0))       // Admin-only
+	// emailGroup.GET("/bucket/inbox", email.GetInboxHandler, middleware.RoleMiddleware(0))       // Admin-only
 }

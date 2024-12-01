@@ -8,10 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
-	"io"
-	"mime"
-	"mime/multipart"
+	"log"
 	"net/http"
 	"net/mail"
 	"regexp"
@@ -21,9 +18,15 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/ses"
+	"github.com/jhillyerd/enmime"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
 )
+
+type EmailService struct {
+	S3Client   *s3.S3
+	BucketName string
+}
 
 func DeductEmailLimit(userID int64) error {
 	// Increment counter
@@ -212,8 +215,8 @@ func GetEmailHandler(c echo.Context) error {
             user_id, 
             sender_email, sender_name, 
             subject, 
-            CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
             body,
+			preview,
 			message_id,
 			attachments,
             timestamp, 
@@ -237,9 +240,10 @@ func ListEmailsHandler(c echo.Context) error {
 	err := config.DB.Select(&emails, `SELECT id, 
             user_id, 
             sender_email, sender_name, 
-            subject, 
-            CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
+            subject,
             body,
+			body_eml,
+			preview,
             timestamp, 
             created_at, 
             updated_at FROM emails and email_type = "inbox" ORDER BY timestamp DESC`)
@@ -273,12 +277,14 @@ func ListEmailByTokenHandler(c echo.Context) error {
             user_id, 
             sender_email, sender_name, 
             subject, 
-            CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
+            preview,
             body,
+			body_eml,
             timestamp, 
             created_at, 
             updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
 	if err != nil {
+		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
@@ -295,20 +301,24 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 func ListEmailByIDHandler(c echo.Context) error {
 	userID := c.Param("id")
+	fmt.Println("userID", userID)
 
 	var emails []Email
 	err := config.DB.Select(&emails, `SELECT id, 
             user_id, 
-            sender_email, sender_name, 
+            sender_email, 
+			sender_name, 
             subject, 
-            CONCAT(LEFT(body, 25), IF(LENGTH(body) > 25, '...', '')) as preview,
+            preview,
             body,
+			body_eml,
             timestamp,
 			message_id,
 			attachments, 
             created_at, 
             updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
 	if err != nil {
+		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
@@ -325,13 +335,27 @@ func ListEmailByIDHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-func getAttachmentURLs(attachmentsJSON string) []string {
+func getAttachmentURLs(attachmentsJSON string) []Attachment {
 	var urls []string
 	if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
 		fmt.Printf("Failed to unmarshal attachments: %v\n", err)
-		return []string{}
+		return nil
 	}
-	return urls
+
+	attachments := make([]Attachment, len(urls))
+	for i, url := range urls {
+		// Extract filename from URL path
+		parts := strings.Split(url, "/")
+		filename := parts[len(parts)-1]
+
+		attachments[i] = Attachment{
+			URL:         url,
+			ContentType: "",
+			Filename:    filename,
+		}
+	}
+
+	return attachments
 }
 
 func DeleteEmailHandler(c echo.Context) error {
@@ -377,83 +401,85 @@ func formatRelativeTime(t time.Time) string {
 	}
 }
 
-func GetInboxHandler(c echo.Context) error {
-	// // Extract user email from context (assuming middleware sets this)
-	// userEmail := c.Get("user_email").(string)
+// func GetInboxHandler(c echo.Context) error {
+// 	// // Extract user email from context (assuming middleware sets this)
+// 	// userEmail := c.Get("user_email").(string)
 
-	// AWS S3 configuration
-	bucketName := viper.GetString("S3_BUCKET_NAME") // e.g., "ses-mailsaja-received"
-	prefix := viper.GetString("S3_PREFIX")          // e.g., "mailsaja@inbox-all/" mailsaja@inbox-all/
+// 	// AWS S3 configuration
+// 	bucketName := viper.GetString("S3_BUCKET_NAME") // e.g., "ses-mailsaja-received"
+// 	prefix := viper.GetString("S3_PREFIX")          // e.g., "mailsaja@inbox-all/" mailsaja@inbox-all/
 
-	// Initialize AWS session
-	sess, _ := pkg.InitAWS()
+// 	// Initialize AWS session
+// 	sess, _ := pkg.InitAWS()
 
-	// Create S3 client
-	s3Client, _ := pkg.InitS3(sess)
+// 	// Create S3 client
+// 	s3Client, _ := pkg.InitS3(sess)
 
-	// List objects in S3 bucket under the user's prefix
-	listInput := &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucketName),
-		Prefix: aws.String(prefix),
-	}
+// 	// List objects in S3 bucket under the user's prefix
+// 	listInput := &s3.ListObjectsV2Input{
+// 		Bucket: aws.String(bucketName),
+// 		Prefix: aws.String(prefix),
+// 	}
 
-	var emails []ParsedEmail
+// 	var emails []ParsedEmail
 
-	err := s3Client.ListObjectsV2Pages(listInput, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
-		for _, obj := range page.Contents {
-			// Get the object (email)
-			getInput := &s3.GetObjectInput{
-				Bucket: aws.String(bucketName),
-				Key:    obj.Key,
-			}
-			getOutput, err := s3Client.GetObject(getInput)
-			if err != nil {
-				fmt.Println("Failed to get object:", err)
-				continue
-			}
-			defer getOutput.Body.Close()
+// 	err := s3Client.ListObjectsV2Pages(listInput, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+// 		for _, obj := range page.Contents {
+// 			// Get the object (email)
+// 			getInput := &s3.GetObjectInput{
+// 				Bucket: aws.String(bucketName),
+// 				Key:    obj.Key,
+// 			}
+// 			getOutput, err := s3Client.GetObject(getInput)
+// 			if err != nil {
+// 				fmt.Println("Failed to get object:", err)
+// 				continue
+// 			}
+// 			defer getOutput.Body.Close()
 
-			// Read the object content
-			buf := new(bytes.Buffer)
-			_, err = io.Copy(buf, getOutput.Body)
-			if err != nil {
-				fmt.Println("Failed to read object content:", err)
-				continue
-			}
+// 			// Read the object content
+// 			buf := new(bytes.Buffer)
+// 			_, err = io.Copy(buf, getOutput.Body)
+// 			if err != nil {
+// 				fmt.Println("Failed to read object content:", err)
+// 				continue
+// 			}
 
-			// Parse the email
-			emailContent := buf.String()
-			msg, err := mail.ReadMessage(strings.NewReader(emailContent))
-			if err != nil {
-				fmt.Println("Failed to parse email:", err)
-				continue
-			}
+// 			// Parse the email
+// 			emailContent := buf.String()
+// 			msg, err := mail.ReadMessage(strings.NewReader(emailContent))
+// 			if err != nil {
+// 				fmt.Println("Failed to parse email:", err)
+// 				continue
+// 			}
 
-			fmt.Println("msg", msg.Header)
+// 			fmt.Println("msg", msg.Header)
 
-			parsedEmail, err := parseEmailFromBucket(msg)
-			if err != nil {
-				fmt.Printf("Failed to parse email: %v\n", err)
-				continue
-			}
+// 			parsedEmail, err := parseEmailFromBucket(msg)
+// 			if err != nil {
+// 				fmt.Printf("Failed to parse email: %v\n", err)
+// 				continue
+// 			}
 
-			emails = append(emails, *parsedEmail)
-		}
-		return !lastPage
-	})
-	if err != nil {
-		fmt.Println("Failed to list objects:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to retrieve emails",
-		})
-	}
+// 			emails = append(emails, *parsedEmail)
+// 		}
+// 		return !lastPage
+// 	})
+// 	if err != nil {
+// 		fmt.Println("Failed to list objects:", err)
+// 		return c.JSON(http.StatusInternalServerError, map[string]string{
+// 			"error": "Failed to retrieve emails",
+// 		})
+// 	}
 
-	return c.JSON(http.StatusOK, emails)
-}
+// 	return c.JSON(http.StatusOK, emails)
+// }
 
 func SyncBucketInboxHandler(c echo.Context) error {
+	// var userID int64
 	// userEmail := c.Get("user_email").(string)
-	userID := c.Get("user_id").(int64)
+	// fmt.Println("userEmail", userEmail)
+	// userID := c.Get("user_id").(int64)
 
 	// AWS S3 configuration
 	bucketName := viper.GetString("S3_BUCKET_NAME")
@@ -470,17 +496,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 
 	stats := SyncStats{}
 
-	// // Fetch existing message IDs
-	// var existingMessageIDs []string
-	// err = config.DB.Select(&existingMessageIDs, "SELECT message_id FROM emails WHERE message_id = ?", id)
-	// if err != nil {
-	// 	fmt.Println("Failed to fetch existing emails:", err)
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch existing emails"})
-	// }
-	// existingMessages := make(map[string]bool)
-	// for _, id := range existingMessageIDs {
-	// 	existingMessages[id] = true
-	// }
+	emails := []PEmail{}
 
 	// List objects in S3 bucket
 	err = s3Client.ListObjectsV2Pages(&s3.ListObjectsV2Input{
@@ -494,13 +510,6 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				stats.SkippedEmails++
 				continue
 			}
-
-			// // Check if email already exists
-			// if existingMessages[messageID] {
-			// 	stats.SkippedEmails++
-			// 	continue
-			// }
-
 			// Get the email object
 			output, err := s3Client.GetObject(&s3.GetObjectInput{
 				Bucket: aws.String(bucketName),
@@ -513,99 +522,86 @@ func SyncBucketInboxHandler(c echo.Context) error {
 			}
 			defer output.Body.Close()
 
-			// Read email content
-			emailContent, err := io.ReadAll(output.Body)
-			if err != nil {
-				fmt.Printf("Failed to read email %s: %v\n", messageID, err)
-				stats.FailedEmails++
-				continue
-			}
+			// Read the email content
+			buf := new(bytes.Buffer)
+			buf.ReadFrom(output.Body)
+			emailContent := buf.Bytes()
 
-			// Parse email
-			msg, err := mail.ReadMessage(bytes.NewReader(emailContent))
+			// Parse the email
+			env, err := enmime.ReadEnvelope(bytes.NewReader(emailContent))
 			if err != nil {
 				fmt.Printf("Failed to parse email %s: %v\n", messageID, err)
 				stats.FailedEmails++
 				continue
 			}
 
-			// Parse email into structured data
-			parsedEmail, err := parseEmailFromBucket(msg)
-			if err != nil {
-				fmt.Printf("Failed to parse email content %s: %v\n", messageID, err)
-				stats.FailedEmails++
-				continue
+			dateT, _ := env.Date()
+
+			// Extract email information
+			email := &PEmail{
+				ID:       messageID,
+				From:     parseAddresses(env.GetHeader("From")),
+				To:       parseAddresses(env.GetHeader("To")),
+				Cc:       parseAddresses(env.GetHeader("Cc")),
+				Bcc:      parseAddresses(env.GetHeader("Bcc")),
+				Subject:  env.GetHeader("Subject"),
+				Date:     dateT,
+				TextBody: env.Text,
+				HTMLBody: env.HTML,
 			}
+			fmt.Println("to", email.To)
+			fmt.Println("to", email.To[0].Address)
 
-			// Prepare data for insertion
-			senderName, senderEmail := parseEmailAddress(parsedEmail.From)
-			preview := generatePreview(parsedEmail.PlainText, parsedEmail.Body)
-			// attachmentsJSON, err := json.Marshal(parsedEmail.Attachments)
-			// if err != nil {
-			// 	fmt.Printf("Failed to marshal attachments for email %s: %v\n", messageID, err)
-			// 	stats.FailedEmails++
-			// 	continue
-			// }
-			// Upload attachments to S3 and collect their URLs
 			var attachmentURLs []string
-
-			for _, attachment := range parsedEmail.Attachments {
-				// Generate a unique key for the attachment in S3
-				attachmentKey := fmt.Sprintf("attachments/%s/%s", messageID, attachment.Filename)
-
-				// Upload the attachment to S3
-				_, err := s3Client.PutObject(&s3.PutObjectInput{
-					Bucket:      aws.String(bucketName),
-					Key:         aws.String(attachmentKey),
-					Body:        bytes.NewReader(attachment.Content),
-					ContentType: aws.String(attachment.ContentType),
-				})
+			// Handle attachments
+			for _, att := range env.Attachments {
+				attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
+				// Upload attachment to S3 (optional)
+				attachmentURL, err := uploadAttachment(att.Content, attachmentKey, att.ContentType)
 				if err != nil {
-					fmt.Printf("Failed to upload attachment %s: %v\n", attachment.Filename, err)
-					stats.FailedEmails++
+					log.Printf("failed to upload attachment: %v", err)
 					continue
 				}
 
-				// Construct the URL for the uploaded attachment
-				attachmentURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucketName, attachmentKey)
+				email.EmlAttachments = append(email.EmlAttachments, Attachment{
+					Filename:    att.FileName,
+					ContentType: att.ContentType,
+					URL:         attachmentURL,
+				})
+
 				attachmentURLs = append(attachmentURLs, attachmentURL)
 			}
 
-			// Serialize the attachment URLs to JSON
-			attachmentsJSON, err := json.Marshal(attachmentURLs)
-			if err != nil {
-				fmt.Printf("Failed to marshal attachment URLs for email %s: %v\n", messageID, err)
-				stats.FailedEmails++
-				continue
-			}
+			emails = append(emails, *email)
+			attachmentsJSON, _ := json.Marshal(attachmentURLs)
 
 			// Insert into emails table
 			_, err = config.DB.Exec(`
-                INSERT INTO emails (
-                    user_id,
-                    sender_email,
-                    sender_name,
-                    subject,
-                    preview,
-                    body,
-                    email_type,
-                    attachments,
-                    message_id,
-                    timestamp,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-            `,
-				userID,
-				senderEmail,
-				senderName,
-				parsedEmail.Subject,
-				preview,
-				parsedEmail.Body,
+			    INSERT INTO emails (
+			        user_id,
+			        sender_email,
+			        sender_name,
+			        subject,
+			        preview,
+			        body,
+			        email_type,
+			        attachments,
+			        message_id,
+			        timestamp,
+			        created_at,
+			        updated_at
+			    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+			`,
+				349,
+				email.From[0].Address,
+				email.From[0].Name,
+				email.Subject,
+				"test_preview",
+				email.HTMLBody,
 				"inbox", // Set email_type as needed
 				string(attachmentsJSON),
-				parsedEmail.MessageID,
-				parsedEmail.Date,
+				email.ID,
+				email.Date,
 			)
 			if err != nil {
 				fmt.Printf("Failed to insert email %s into DB: %v\n", messageID, err)
@@ -613,16 +609,110 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				continue
 			}
 
-			// Delete the object from S3
-			_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
-				Bucket: aws.String(bucketName),
-				Key:    aws.String(messageID),
-			})
-			if err != nil {
-				fmt.Printf("Failed to delete object %s from S3: %v\n", messageID, err)
-				stats.FailedEmails++
-				continue
-			}
+			// // Read email content
+			// emailContent, err := io.ReadAll(output.Body)
+			// if err != nil {
+			// 	fmt.Printf("Failed to read email %s: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
+
+			// // Parse email
+			// msg, err := mail.ReadMessage(bytes.NewReader(emailContent))
+			// if err != nil {
+			// 	fmt.Printf("Failed to parse email %s: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
+
+			// // Parse email into structured data
+			// parsedEmail, err := parseEmailFromBucket(msg)
+			// if err != nil {
+			// 	fmt.Printf("Failed to parse email content %s: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
+
+			// // Prepare data for insertion
+			// senderName, senderEmail := parseEmailAddress(parsedEmail.From)
+			// preview := generatePreview(parsedEmail.PlainText, parsedEmail.Body)
+			// // Upload attachments to S3 and collect their URLs
+			// var attachmentURLs []string
+
+			// for _, attachment := range parsedEmail.Attachments {
+			// 	// Generate a unique key for the attachment in S3
+			// 	attachmentKey := fmt.Sprintf("attachments/%s/%s", messageID, attachment.Filename)
+
+			// 	// Upload the attachment to S3
+			// 	_, err := s3Client.PutObject(&s3.PutObjectInput{
+			// 		Bucket:      aws.String(bucketName),
+			// 		Key:         aws.String(attachmentKey),
+			// 		Body:        bytes.NewReader(attachment.Content),
+			// 		ContentType: aws.String(attachment.ContentType),
+			// 	})
+			// 	if err != nil {
+			// 		fmt.Printf("Failed to upload attachment %s: %v\n", attachment.Filename, err)
+			// 		stats.FailedEmails++
+			// 		continue
+			// 	}
+
+			// 	// Construct the URL for the uploaded attachment
+			// 	attachmentURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucketName, attachmentKey)
+			// 	attachmentURLs = append(attachmentURLs, attachmentURL)
+			// }
+
+			// // Serialize the attachment URLs to JSON
+			// attachmentsJSON, err := json.Marshal(attachmentURLs)
+			// if err != nil {
+			// 	fmt.Printf("Failed to marshal attachment URLs for email %s: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
+
+			// // Insert into emails table
+			// _, err = config.DB.Exec(`
+			//     INSERT INTO emails (
+			//         user_id,
+			//         sender_email,
+			//         sender_name,
+			//         subject,
+			//         preview,
+			//         body,
+			//         email_type,
+			//         attachments,
+			//         message_id,
+			//         timestamp,
+			//         created_at,
+			//         updated_at
+			//     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+			// `,
+			// 	userID,
+			// 	senderEmail,
+			// 	senderName,
+			// 	parsedEmail.Subject,
+			// 	preview,
+			// 	parsedEmail.Body,
+			// 	"inbox", // Set email_type as needed
+			// 	string(attachmentsJSON),
+			// 	parsedEmail.MessageID,
+			// 	parsedEmail.Date,
+			// )
+			// if err != nil {
+			// 	fmt.Printf("Failed to insert email %s into DB: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
+
+			// // Delete the object from S3
+			// _, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
+			// 	Bucket: aws.String(bucketName),
+			// 	Key:    aws.String(messageID),
+			// })
+			// if err != nil {
+			// 	fmt.Printf("Failed to delete object %s from S3: %v\n", messageID, err)
+			// 	stats.FailedEmails++
+			// 	continue
+			// }
 
 			stats.NewEmails++
 		}
@@ -634,6 +724,53 @@ func SyncBucketInboxHandler(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, stats)
+}
+
+func parseAddresses(addresses string) []EmailAddress {
+	var result []EmailAddress
+	parsed, err := enmime.ParseAddressList(addresses)
+	if err != nil {
+		return result
+	}
+	for _, addr := range parsed {
+		result = append(result, EmailAddress{
+			Name:    addr.Name,
+			Address: addr.Address,
+		})
+	}
+	return result
+}
+
+func uploadAttachment(content []byte, key, contentType string) (string, error) {
+	bucketName := viper.GetString("S3_BUCKET_NAME")
+	// prefix := viper.GetString("S3_PREFIX")
+
+	// Upload attachment to S3
+	sess, _ := pkg.InitAWS()
+
+	// Create S3 client
+	s3Client, _ := pkg.InitS3(sess)
+	_, err := s3Client.PutObject(&s3.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(content),
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload attachment to S3: %v", err)
+	}
+
+	// Generate a pre-signed URL for the attachment
+	req, _ := s3Client.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(key),
+	})
+	urlStr, err := req.Presign(15 * time.Minute) // URL valid for 15 minutes
+	if err != nil {
+		return "", fmt.Errorf("failed to presign S3 URL: %v", err)
+	}
+
+	return urlStr, nil
 }
 
 // func ProcessEmailsFromS3() error {
@@ -718,49 +855,49 @@ func SyncBucketInboxHandler(c echo.Context) error {
 // 	return nil
 // }
 
-func insertEmailToDB(email *ParsedEmail, userID int64) error {
-	// Extract sender name and email from the "From" field
-	senderName, senderEmail := parseEmailAddress(email.From)
+// func insertEmailToDB(email *ParsedEmail, userID int64) error {
+// 	// Extract sender name and email from the "From" field
+// 	senderName, senderEmail := parseEmailAddress(email.From)
 
-	// Generate a preview from the plain text or HTML body
-	preview := generatePreview(email.PlainText, email.Body)
+// 	// Generate a preview from the plain text or HTML body
+// 	preview := generatePreview(email.PlainText, email.Body)
 
-	// Convert attachments to JSON format
-	attachmentsJSON, err := json.Marshal(email.Attachments)
-	if err != nil {
-		return fmt.Errorf("failed to marshal attachments: %v", err)
-	}
+// 	// Convert attachments to JSON format
+// 	attachmentsJSON, err := json.Marshal(email.Attachments)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to marshal attachments: %v", err)
+// 	}
 
-	// Insert into emails table
-	_, err = config.DB.Exec(`
-        INSERT INTO emails (
-            user_id,
-            sender_email,
-            sender_name,
-            subject,
-            preview,
-            body,
-            email_type,
-            attachments,
-            message_id,
-            timestamp,
-            created_at,
-            updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-    `,
-		userID,
-		senderEmail,
-		senderName,
-		email.Subject,
-		preview,
-		email.Body,
-		"", // Set email_type as needed
-		string(attachmentsJSON),
-		email.MessageID,
-		email.Date, // Timestamp
-	)
-	return err
-}
+// 	// Insert into emails table
+// 	_, err = config.DB.Exec(`
+//         INSERT INTO emails (
+//             user_id,
+//             sender_email,
+//             sender_name,
+//             subject,
+//             preview,
+//             body,
+//             email_type,
+//             attachments,
+//             message_id,
+//             timestamp,
+//             created_at,
+//             updated_at
+//         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+//     `,
+// 		userID,
+// 		senderEmail,
+// 		senderName,
+// 		email.Subject,
+// 		preview,
+// 		email.Body,
+// 		"", // Set email_type as needed
+// 		string(attachmentsJSON),
+// 		email.MessageID,
+// 		email.Date, // Timestamp
+// 	)
+// 	return err
+// }
 
 func parseEmailAddress(address string) (name string, email string) {
 	addr, err := mail.ParseAddress(address)
@@ -785,7 +922,7 @@ func generatePreview(plainText string, htmlBody string) string {
 	return text
 }
 
-// Simple HTML to text converter (you might want to use a proper library)
+// // Simple HTML to text converter (you might want to use a proper library)
 func html2text(html string) string {
 	// This is a very basic implementation
 	// Consider using a proper HTML to text library
@@ -806,124 +943,124 @@ func html2text(html string) string {
 	return strings.TrimSpace(text)
 }
 
-func parseEmailFromBucket(msg *mail.Message) (*ParsedEmail, error) {
-	parsed := &ParsedEmail{
-		MessageID: msg.Header.Get("Message-Id"),
-		Subject:   msg.Header.Get("Subject"),
-		From:      msg.Header.Get("From"),
-		To:        msg.Header.Get("To"),
-	}
+// func parseEmailFromBucket(msg *mail.Message) (*ParsedEmail, error) {
+// 	parsed := &ParsedEmail{
+// 		MessageID: msg.Header.Get("Message-Id"),
+// 		Subject:   msg.Header.Get("Subject"),
+// 		From:      msg.Header.Get("From"),
+// 		To:        msg.Header.Get("To"),
+// 	}
 
-	if dateStr := msg.Header.Get("Date"); dateStr != "" {
-		if parsedDate, err := time.Parse(time.RFC1123Z, dateStr); err == nil {
-			parsed.Date = parsedDate
-		}
-	}
+// 	if dateStr := msg.Header.Get("Date"); dateStr != "" {
+// 		if parsedDate, err := time.Parse(time.RFC1123Z, dateStr); err == nil {
+// 			parsed.Date = parsedDate
+// 		}
+// 	}
 
-	contentType := msg.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "multipart/") {
-		_, params, err := mime.ParseMediaType(contentType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse content type: %v", err)
-		}
+// 	contentType := msg.Header.Get("Content-Type")
+// 	if strings.HasPrefix(contentType, "multipart/") {
+// 		_, params, err := mime.ParseMediaType(contentType)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("failed to parse content type: %v", err)
+// 		}
 
-		mr := multipart.NewReader(msg.Body, params["boundary"])
-		var htmlBody, plainBody string
+// 		mr := multipart.NewReader(msg.Body, params["boundary"])
+// 		var htmlBody, plainBody string
 
-		for {
-			part, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				continue
-			}
+// 		for {
+// 			part, err := mr.NextPart()
+// 			if err == io.EOF {
+// 				break
+// 			}
+// 			if err != nil {
+// 				continue
+// 			}
 
-			content, err := io.ReadAll(part)
-			if err != nil {
-				continue
-			}
+// 			content, err := io.ReadAll(part)
+// 			if err != nil {
+// 				continue
+// 			}
 
-			partType, params, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
-			if err != nil {
-				continue
-			}
+// 			partType, params, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
+// 			if err != nil {
+// 				continue
+// 			}
 
-			disposition, _, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
-			isAttachment := err == nil && (disposition == "attachment" || part.FileName() != "")
+// 			disposition, _, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+// 			isAttachment := err == nil && (disposition == "attachment" || part.FileName() != "")
 
-			switch {
-			case isAttachment:
-				attachment := Attachment{
-					Filename:    part.FileName(),
-					ContentType: partType,
-					Size:        int64(len(content)),
-					Content:     content,
-				}
-				parsed.Attachments = append(parsed.Attachments, attachment)
-			case strings.HasPrefix(partType, "multipart/"):
-				// Handle nested multipart
-				nestedMR := multipart.NewReader(bytes.NewReader(content), params["boundary"])
-				handleNestedParts(nestedMR, parsed)
-			case strings.HasPrefix(partType, "text/html"):
-				htmlBody = string(content)
-			case strings.HasPrefix(partType, "text/plain"):
-				plainBody = string(content)
-			}
-		}
+// 			switch {
+// 			case isAttachment:
+// 				attachment := Attachment{
+// 					Filename:    part.FileName(),
+// 					ContentType: partType,
+// 					Size:        int64(len(content)),
+// 					Content:     content,
+// 				}
+// 				parsed.Attachments = append(parsed.Attachments, attachment)
+// 			case strings.HasPrefix(partType, "multipart/"):
+// 				// Handle nested multipart
+// 				nestedMR := multipart.NewReader(bytes.NewReader(content), params["boundary"])
+// 				handleNestedParts(nestedMR, parsed)
+// 			case strings.HasPrefix(partType, "text/html"):
+// 				htmlBody = string(content)
+// 			case strings.HasPrefix(partType, "text/plain"):
+// 				plainBody = string(content)
+// 			}
+// 		}
 
-		// Prioritize HTML body if available
-		if htmlBody != "" {
-			parsed.Body = htmlBody
-			parsed.PlainText = plainBody
-		} else if plainBody != "" {
-			parsed.PlainText = plainBody
-			parsed.Body = textToHTML(plainBody)
-		}
-	} else {
-		// Handle single part message
-		body, err := io.ReadAll(msg.Body)
-		if err == nil {
-			if strings.HasPrefix(contentType, "text/html") {
-				parsed.Body = string(body)
-			} else {
-				parsed.PlainText = string(body)
-				parsed.Body = textToHTML(string(body))
-			}
-		}
-	}
+// 		// Prioritize HTML body if available
+// 		if htmlBody != "" {
+// 			parsed.Body = htmlBody
+// 			parsed.PlainText = plainBody
+// 		} else if plainBody != "" {
+// 			parsed.PlainText = plainBody
+// 			parsed.Body = textToHTML(plainBody)
+// 		}
+// 	} else {
+// 		// Handle single part message
+// 		body, err := io.ReadAll(msg.Body)
+// 		if err == nil {
+// 			if strings.HasPrefix(contentType, "text/html") {
+// 				parsed.Body = string(body)
+// 			} else {
+// 				parsed.PlainText = string(body)
+// 				parsed.Body = textToHTML(string(body))
+// 			}
+// 		}
+// 	}
 
-	return parsed, nil
-}
+// 	return parsed, nil
+// }
 
-func textToHTML(text string) string {
-	// Convert plain text to HTML
-	text = html.EscapeString(text)
-	text = strings.ReplaceAll(text, "\n", "<br>")
-	return fmt.Sprintf("<div style=\"font-family: Arial, sans-serif;\">%s</div>", text)
-}
+// func textToHTML(text string) string {
+// 	// Convert plain text to HTML
+// 	text = html.EscapeString(text)
+// 	text = strings.ReplaceAll(text, "\n", "<br>")
+// 	return fmt.Sprintf("<div style=\"font-family: Arial, sans-serif;\">%s</div>", text)
+// }
 
-func handleNestedParts(mr *multipart.Reader, parsed *ParsedEmail) {
-	for {
-		part, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			continue
-		}
+// func handleNestedParts(mr *multipart.Reader, parsed *ParsedEmail) {
+// 	for {
+// 		part, err := mr.NextPart()
+// 		if err == io.EOF {
+// 			break
+// 		}
+// 		if err != nil {
+// 			continue
+// 		}
 
-		content, err := io.ReadAll(part)
-		if err != nil {
-			continue
-		}
+// 		content, err := io.ReadAll(part)
+// 		if err != nil {
+// 			continue
+// 		}
 
-		partType := part.Header.Get("Content-Type")
-		switch {
-		case strings.HasPrefix(partType, "text/html"):
-			parsed.Body = string(content)
-		case strings.HasPrefix(partType, "text/plain"):
-			parsed.PlainText = string(content)
-		}
-	}
-}
+// 		partType := part.Header.Get("Content-Type")
+// 		switch {
+// 		case strings.HasPrefix(partType, "text/html"):
+// 			parsed.Body = string(content)
+// 		case strings.HasPrefix(partType, "text/plain"):
+// 			parsed.PlainText = string(content)
+// 		}
+// 	}
+// }

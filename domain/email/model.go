@@ -10,12 +10,28 @@ type Email struct {
 	Subject     string    `db:"subject"`
 	Preview     string    `db:"preview"`
 	Body        string    `db:"body"`
+	BodyEml     string    `db:"body_eml"`
 	EmailType   string    `db:"email_type"`
 	Attachments string    `db:"attachments"` // JSON format
 	MessageID   string    `db:"message_id"`  // Message ID from email provider
 	Timestamp   time.Time `db:"timestamp"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
+}
+
+type PEmail struct {
+	ID             string         `json:"id"`
+	From           []EmailAddress `json:"from"`
+	To             []EmailAddress `json:"to"`
+	Cc             []EmailAddress `json:"cc,omitempty"`
+	Bcc            []EmailAddress `json:"bcc,omitempty"`
+	Subject        string         `json:"subject"`
+	Date           time.Time      `json:"date"`
+	TextBody       string         `json:"text_body,omitempty"`
+	HTMLBody       string         `json:"html_body,omitempty"`
+	Attachments    string         `db:"attachments"`
+	EmlAttachments []Attachment   `json:"attachments,omitempty"`
+	Timestamp      time.Time      `db:"timestamp"`
 }
 
 type SendEmailRequest struct {
@@ -29,15 +45,14 @@ type SendEmailRequest struct {
 // Convert timestamps to relative time
 type EmailResponse struct {
 	Email
-	ListAttachments []string `json:"ListAttachments"`
-	RelativeTime    string   `json:"RelativeTime"`
+	ListAttachments []Attachment `json:"ListAttachments"`
+	RelativeTime    string       `json:"RelativeTime"`
 }
 
 type Attachment struct {
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type"`
-	Size        int64  `json:"size"`
-	Content     []byte `json:"content"` // Raw content, not included in JSON
+	Filename    string `json:"Filename"`
+	ContentType string `json:"ContentType"`
+	URL         string `json:"URL"` // URL to download the attachment from S3
 }
 
 type ParsedEmail struct {
@@ -56,4 +71,9 @@ type SyncStats struct {
 	NewEmails     int `json:"new_emails"`
 	SkippedEmails int `json:"skipped_emails"`
 	FailedEmails  int `json:"failed_emails"`
+}
+
+type EmailAddress struct {
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
 }
