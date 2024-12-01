@@ -2,14 +2,25 @@ package pkg
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
+	"mime/multipart"
+	"net/textproto"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/spf13/viper"
 )
+
+// Attachment represents an email attachment
+type Attachment struct {
+	Filename    string
+	ContentType string
+	Content     []byte // Base64-encoded content
+}
 
 func InitAWS() (*session.Session, error) {
 	// Initialize AWS session
@@ -90,4 +101,91 @@ func DeleteS3FolderContents(s3Client *s3.S3, bucket, prefix string) error {
 
 		return !lastPage
 	})
+}
+
+func UploadAttachment(content []byte, key, contentType string) (string, error) {
+	// Get S3 configuration
+	bucketName := viper.GetString("S3_BUCKET_NAME")
+	region := viper.GetString("AWS_REGION")
+
+	// Create S3 client
+	sess, _ := InitAWS()
+
+	s3Client := s3.New(sess)
+
+	// Upload to S3
+	input := &s3.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(content),
+		ContentType: aws.String(contentType),
+	}
+
+	_, err := s3Client.PutObject(input)
+	if err != nil {
+		return "", fmt.Errorf("failed to upload to S3: %v", err)
+	}
+
+	// Generate S3 URL
+	s3URL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s",
+		bucketName,
+		region,
+		key,
+	)
+
+	return s3URL, nil
+}
+
+// SendEmail sends an email with optional attachments using AWS SES
+func SendEmail(toAddress, fromAddress, subject, htmlBody string, attachments []Attachment) error {
+	// Initialize AWS session
+	sess, _ := InitAWS()
+
+	sesClient := ses.New(sess)
+
+	// Build the email body
+	var emailRaw bytes.Buffer
+	writer := multipart.NewWriter(&emailRaw)
+
+	// Write MIME headers
+	emailHeaders := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n",
+		fromAddress, toAddress, subject, writer.Boundary())
+	emailRaw.Write([]byte(emailHeaders))
+
+	// Write the HTML body part
+	htmlPartHeaders := textproto.MIMEHeader{}
+	htmlPartHeaders.Set("Content-Type", "text/html; charset=UTF-8")
+	htmlPartHeaders.Set("Content-Transfer-Encoding", "base64")
+
+	htmlPart, _ := writer.CreatePart(htmlPartHeaders)
+	encodedBody := base64.StdEncoding.EncodeToString([]byte(htmlBody))
+	htmlPart.Write([]byte(encodedBody))
+
+	// Write attachments
+	for _, att := range attachments {
+		attachmentHeaders := textproto.MIMEHeader{}
+		attachmentHeaders.Set("Content-Type", fmt.Sprintf("%s; name=\"%s\"", att.ContentType, att.Filename))
+		attachmentHeaders.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", att.Filename))
+		attachmentHeaders.Set("Content-Transfer-Encoding", "base64")
+
+		attachmentPart, _ := writer.CreatePart(attachmentHeaders)
+		encodedContent := base64.StdEncoding.EncodeToString(att.Content)
+		attachmentPart.Write([]byte(encodedContent))
+	}
+
+	writer.Close()
+
+	// Send the email
+	input := &ses.SendRawEmailInput{
+		RawMessage: &ses.RawMessage{
+			Data: emailRaw.Bytes(),
+		},
+	}
+
+	_, err := sesClient.SendRawEmail(input)
+	if err != nil {
+		return fmt.Errorf("failed to send email: %v", err)
+	}
+
+	return nil
 }

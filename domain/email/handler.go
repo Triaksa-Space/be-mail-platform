@@ -5,6 +5,7 @@ import (
 	"email-platform/config"
 	"email-platform/domain/user"
 	"email-platform/pkg"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/jhillyerd/enmime"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -67,82 +67,88 @@ func CheckEmailLimit(userID int64) error {
 	return err
 }
 
+// handler.go
 func SendEmailHandler(c echo.Context) error {
-	// Get user ID from context
+	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
-	userEmail := c.Get("email").(string)
+
+	var emailUser string
+	err := config.DB.Get(&emailUser, `
+        SELECT email 
+        FROM users 
+        WHERE id = ? LIMIT 1`, userID)
+	if err != nil {
+		fmt.Println("Failed to fetch user email", err)
+		return err
+	}
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
+		fmt.Println("Email limit exceeded", err)
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": err.Error(),
+			"error": "Email limit exceeded",
 		})
 	}
 
 	// Parse and validate request
 	req := new(SendEmailRequest)
 	if err := c.Bind(req); err != nil {
+		fmt.Println("Failed to bind request", err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Invalid request payload",
 		})
 	}
 
-	attachmentsStr := ""
-
-	for _, attachment := range req.Attachments {
-		// 	fmt.Println("Attachment Name:", attachment.Name)
-		// 	fmt.Println("Attachment Content:", attachment.Content)
-		attachmentsStr = attachmentsStr + "," + attachment.Filename + ","
-	}
-
-	// Initialize AWS session
-	sess, _ := pkg.InitAWS()
-
-	// // Upload attachments to S3
+	// Prepare attachments and upload to S3
+	var attachments []pkg.Attachment
 	// var attachmentURLs []string
-	// if len(req.Attachments) > 0 {
-	// 	s3Client := s3.New(sess)
-	// 	for idx, attachment := range req.Attachments {
-	// 		key := fmt.Sprintf("attachments/%d/%d-%s", userID, time.Now().UnixNano(), idx)
-	// 		_, err = s3Client.PutObject(&s3.PutObjectInput{
-	// 			Bucket: aws.String(viper.GetString("AWS_S3_BUCKET")),
-	// 			Key:    aws.String(key),
-	// 			Body:   strings.NewReader(attachment),
-	// 		})
-	// 		if err != nil {
-	// 			return c.JSON(http.StatusInternalServerError, map[string]string{
-	// 				"error": "Failed to upload attachment",
-	// 			})
-	// 		}
-	// 		attachmentURL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s",
-	// 			viper.GetString("AWS_S3_BUCKET"), key)
-	// 		attachmentURLs = append(attachmentURLs, attachmentURL)
-	// 	}
-	// }
+	if len(req.Attachments) > 0 {
+		for _, att := range req.Attachments {
+			// Strip the data URL prefix if present
+			content := att.Content
+			contentStr := string(content)
+			if strings.HasPrefix(contentStr, "data:") {
+				parts := strings.SplitN(contentStr, ",", 2)
+				if len(parts) == 2 {
+					content = []byte(parts[1])
+				}
+			}
 
-	// Send email via SES
-	sesClient := ses.New(sess)
+			// Decode base64 content
+			decodedContent, err := base64.StdEncoding.DecodeString(string(content))
+			if err != nil {
+				fmt.Printf("Failed to decode attachment %s: %v\n", att.Filename, err)
+				return c.JSON(http.StatusBadRequest, map[string]string{
+					"error": fmt.Sprintf("Invalid base64 content for attachment %s", att.Filename),
+				})
+			}
 
-	input := &ses.SendEmailInput{
-		Destination: &ses.Destination{
-			ToAddresses: []*string{aws.String(req.To)},
-		},
-		Message: &ses.Message{
-			Body: &ses.Body{
-				Text: &ses.Content{
-					Charset: aws.String("UTF-8"),
-					Data:    aws.String(req.Body),
-				},
-			},
-			Subject: &ses.Content{
-				Charset: aws.String("UTF-8"),
-				Data:    aws.String(req.Subject),
-			},
-		},
-		Source: aws.String(userEmail),
+			// // Generate a unique key for the attachment in S3
+			// attachmentKey := fmt.Sprintf("attachments/%d/%s", userID, att.Filename)
+
+			// // Upload the attachment to S3
+			// attachmentURL, err := pkg.UploadAttachment(decodedContent, attachmentKey, att.ContentType)
+			// if err != nil {
+			// 	fmt.Printf("Failed to upload attachment %s: %v\n", att.Filename, err)
+			// 	return c.JSON(http.StatusInternalServerError, map[string]string{
+			// 		"error": fmt.Sprintf("Failed to upload attachment %s", att.Filename),
+			// 	})
+			// }
+
+			// // Append the attachment URL to the list
+			// attachmentURLs = append(attachmentURLs, attachmentURL)
+
+			// // Prepare the attachment for sending email
+			attachments = append(attachments, pkg.Attachment{
+				Filename:    att.Filename,
+				ContentType: att.ContentType,
+				Content:     decodedContent,
+			})
+		}
 	}
 
-	_, err := sesClient.SendEmail(input)
+	// Send email via pkg/aws
+	err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -159,53 +165,41 @@ func SendEmailHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	result, err := tx.Exec(`
-        INSERT INTO emails (user_id, email_type, sender_email, sender_name, subject, body, attachments, timestamp, created_at, updated_at) 
+	attachmentsJSON, _ := json.Marshal(req.Attachments)
+	_, err = tx.Exec(`
+        INSERT INTO emails (
+            user_id,
+            email_type,
+            sender_email,
+            sender_name,
+            subject,
+            body,
+            attachments,
+            timestamp,
+            created_at,
+            updated_at
+        ) 
         VALUES (?, "sent", ?, ?, ?, ?, ?, NOW(), NOW(), NOW())`,
-		userID, userEmail, "", req.Subject, req.Body, attachmentsStr)
+		userID, emailUser, "", req.Subject, req.Body, attachmentsJSON)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to save email",
 		})
 	}
 
-	_, err = result.LastInsertId()
-	if err != nil {
-		// // DEDUCT COUNT SENT EMAIL
-		// DeductEmailLimit(userID)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to get email ID",
-		})
-	}
-
-	// // Save attachments
-	// for _, url := range attachmentURLs {
-	// 	_, err = tx.Exec(`
-	//         INSERT INTO email_attachments (email_id, url, created_at, updated_at)
-	//         VALUES (?, ?, NOW(), NOW())`,
-	// 		emailID, url)
-	// 	if err != nil {
-	// 		return c.JSON(http.StatusInternalServerError, map[string]string{
-	// 			"error": "Failed to save attachment",
-	// 		})
-	// 	}
-	// }
-
 	if err := tx.Commit(); err != nil {
-		// // DEDUCT COUNT SENT EMAIL
-		// DeductEmailLimit(userID)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to commit transaction",
 		})
 	}
 
-	// TODO: Only ADD COUNT when email successfully
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
 }
 
 func GetEmailHandler(c echo.Context) error {
+	fmt.Println("GetEmailHandler")
 	emailID := c.Param("id")
 	// TODO: ATTACHMENT DIBUAT TABLE SENDIRI SAJA
 
@@ -301,7 +295,6 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 func ListEmailByIDHandler(c echo.Context) error {
 	userID := c.Param("id")
-	fmt.Println("userID", userID)
 
 	var emails []Email
 	err := config.DB.Select(&emails, `SELECT id, 
@@ -549,25 +542,16 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				TextBody: env.Text,
 				HTMLBody: env.HTML,
 			}
-			fmt.Println("to", email.To)
-			fmt.Println("to", email.To[0].Address)
 
 			var attachmentURLs []string
 			// Handle attachments
 			for _, att := range env.Attachments {
 				attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
-				// Upload attachment to S3 (optional)
-				attachmentURL, err := uploadAttachment(att.Content, attachmentKey, att.ContentType)
+				attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
 				if err != nil {
-					log.Printf("failed to upload attachment: %v", err)
+					log.Printf("Failed to upload attachment: %v", err)
 					continue
 				}
-
-				email.EmlAttachments = append(email.EmlAttachments, Attachment{
-					Filename:    att.FileName,
-					ContentType: att.ContentType,
-					URL:         attachmentURL,
-				})
 
 				attachmentURLs = append(attachmentURLs, attachmentURL)
 			}
@@ -741,37 +725,37 @@ func parseAddresses(addresses string) []EmailAddress {
 	return result
 }
 
-func uploadAttachment(content []byte, key, contentType string) (string, error) {
-	bucketName := viper.GetString("S3_BUCKET_NAME")
-	// prefix := viper.GetString("S3_PREFIX")
+// func uploadAttachment(content []byte, key, contentType string) (string, error) {
+// 	bucketName := viper.GetString("S3_BUCKET_NAME")
+// 	// prefix := viper.GetString("S3_PREFIX")
 
-	// Upload attachment to S3
-	sess, _ := pkg.InitAWS()
+// 	// Upload attachment to S3
+// 	sess, _ := pkg.InitAWS()
 
-	// Create S3 client
-	s3Client, _ := pkg.InitS3(sess)
-	_, err := s3Client.PutObject(&s3.PutObjectInput{
-		Bucket:      aws.String(bucketName),
-		Key:         aws.String(key),
-		Body:        bytes.NewReader(content),
-		ContentType: aws.String(contentType),
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to upload attachment to S3: %v", err)
-	}
+// 	// Create S3 client
+// 	s3Client, _ := pkg.InitS3(sess)
+// 	_, err := s3Client.PutObject(&s3.PutObjectInput{
+// 		Bucket:      aws.String(bucketName),
+// 		Key:         aws.String(key),
+// 		Body:        bytes.NewReader(content),
+// 		ContentType: aws.String(contentType),
+// 	})
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to upload attachment to S3: %v", err)
+// 	}
 
-	// Generate a pre-signed URL for the attachment
-	req, _ := s3Client.GetObjectRequest(&s3.GetObjectInput{
-		Bucket: aws.String(bucketName),
-		Key:    aws.String(key),
-	})
-	urlStr, err := req.Presign(15 * time.Minute) // URL valid for 15 minutes
-	if err != nil {
-		return "", fmt.Errorf("failed to presign S3 URL: %v", err)
-	}
+// 	// Generate a pre-signed URL for the attachment
+// 	req, _ := s3Client.GetObjectRequest(&s3.GetObjectInput{
+// 		Bucket: aws.String(bucketName),
+// 		Key:    aws.String(key),
+// 	})
+// 	urlStr, err := req.Presign(15 * time.Minute) // URL valid for 15 minutes
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to presign S3 URL: %v", err)
+// 	}
 
-	return urlStr, nil
-}
+// 	return urlStr, nil
+// }
 
 // func ProcessEmailsFromS3() error {
 // 	// AWS S3 configuration

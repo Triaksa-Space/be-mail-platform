@@ -22,7 +22,11 @@ type ChangePasswordRequest struct {
 type CreateUserRequest struct {
 	Email    string `json:"email" validate:"required,email"`
 	Password string `json:"password" validate:"required,min=6"`
-	RoleID   int    `json:"role_id" validate:"required"`
+}
+
+type CreateAdminRequest struct {
+	Username string `json:"username" validate:"required"`
+	Password string `json:"password" validate:"required,min=6"`
 }
 
 type BulkCreateUserRequest struct {

@@ -52,6 +52,7 @@ type EmailResponse struct {
 type Attachment struct {
 	Filename    string `json:"Filename"`
 	ContentType string `json:"ContentType"`
+	Content     []byte `json:"Content"`
 	URL         string `json:"URL"` // URL to download the attachment from S3
 }
 

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/spf13/viper"
 )
 
 type LoginRequest struct {
@@ -84,6 +83,46 @@ func ChangePasswordHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
 }
 
+func CreateUserAdminHandler(c echo.Context) error {
+	req := new(CreateAdminRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
+	// if err := c.Validate(req); err != nil {
+	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	// }
+
+	// Hash the password
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// Insert the user into the database
+	_, err = config.DB.Exec(
+		"INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())",
+		req.Username, hashedPassword, 0, // Hardcoded role ID for now
+	)
+	if err != nil {
+		fmt.Println("ERROR", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// // Initialize AWS session
+	// sess, _ := pkg.InitAWS()
+
+	// // Create S3 client
+	// s3Client, _ := pkg.InitS3(sess)
+
+	// err = pkg.CreateBucketFolderEmailUser(s3Client, req.Email)
+	// if err != nil {
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	// }
+
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
+}
+
 func CreateUserHandler(c echo.Context) error {
 	req := new(CreateUserRequest)
 	if err := c.Bind(req); err != nil {
@@ -119,16 +158,16 @@ func CreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	// Initialize AWS session
-	sess, _ := pkg.InitAWS()
+	// // Initialize AWS session
+	// sess, _ := pkg.InitAWS()
 
-	// Create S3 client
-	s3Client, _ := pkg.InitS3(sess)
+	// // Create S3 client
+	// s3Client, _ := pkg.InitS3(sess)
 
-	err = pkg.CreateBucketFolderEmailUser(s3Client, req.Email)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
+	// err = pkg.CreateBucketFolderEmailUser(s3Client, req.Email)
+	// if err != nil {
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	// }
 
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
 }
@@ -226,7 +265,7 @@ func DeleteUserHandler(c echo.Context) error {
 
 	// Get user email before deletion for S3
 	var userEmail string
-	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ? AND role_id = 1", userID)
+	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
@@ -245,7 +284,7 @@ func DeleteUserHandler(c echo.Context) error {
 	}
 
 	// Delete user
-	result, err := tx.Exec("DELETE FROM users WHERE id = ? AND role_id = 1", userID)
+	result, err := tx.Exec("DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
 	}
@@ -260,20 +299,21 @@ func DeleteUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
 	}
 
-	// Initialize AWS session
-	sess, _ := pkg.InitAWS()
-	s3Client, _ := pkg.InitS3(sess)
+	// TODO: SEARCH HIS ATTACHMENT AND DELETE IT
+	// // Initialize AWS session
+	// sess, _ := pkg.InitAWS()
+	// s3Client, _ := pkg.InitS3(sess)
 
-	// Delete S3 folder
-	bucketName := viper.GetString("S3_BUCKET_NAME")
-	prefix := fmt.Sprintf("%s/", userEmail)
+	// // Delete S3 folder
+	// bucketName := viper.GetString("S3_BUCKET_NAME")
+	// prefix := fmt.Sprintf("%s/", userEmail)
 
-	// List and delete all objects with the user's prefix
-	err = pkg.DeleteS3FolderContents(s3Client, bucketName, prefix)
-	if err != nil {
-		fmt.Println("Failed to delete S3 folder:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user files"})
-	}
+	// // List and delete all objects with the user's prefix
+	// err = pkg.DeleteS3FolderContents(s3Client, bucketName, prefix)
+	// if err != nil {
+	// 	fmt.Println("Failed to delete S3 folder:", err)
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user files"})
+	// }
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully"})
 }
@@ -306,7 +346,7 @@ func GetUserMeHandler(c echo.Context) error {
 }
 
 func ListAdminUsersHandler(c echo.Context) error {
-	searchUsername := c.QueryParam("username")
+	searchUsername := c.QueryParam("email")
 	// Fetch paginated users
 	var users []User
 	query := "SELECT * FROM users WHERE role_id = 0 "

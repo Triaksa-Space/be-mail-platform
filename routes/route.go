@@ -22,8 +22,9 @@ func RegisterRoutes(e *echo.Echo) {
 	userGroup := e.Group("/user")
 	userGroup.Use(middleware.JWTMiddleware)
 	userGroup.PUT("/change_password", user.ChangePasswordHandler)
-	userGroup.POST("/", user.CreateUserHandler, middleware.RoleMiddleware(0))         // Admin-only
-	userGroup.POST("/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(0)) // Admin-only
+	userGroup.POST("/", user.CreateUserHandler, middleware.RoleMiddleware(0))           // Admin-only
+	userGroup.POST("/admin", user.CreateUserAdminHandler, middleware.RoleMiddleware(0)) // Admin-only
+	userGroup.POST("/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(0))   // Admin-only
 	userGroup.GET("/:id", user.GetUserHandler, middleware.RoleMiddleware(0))
 	userGroup.GET("/get_user_me", user.GetUserMeHandler)
 	userGroup.GET("/", user.ListUsersHandler, middleware.RoleMiddleware(0))
@@ -32,9 +33,10 @@ func RegisterRoutes(e *echo.Echo) {
 
 	// Email routes
 	emailGroup := e.Group("/email", middleware.JWTMiddleware)
-	emailGroup.GET("/:id", email.GetEmailHandler)
+	emailGroup.GET("/:id", email.GetEmailHandler, middleware.RoleMiddleware(0))
 	emailGroup.GET("/by_user", email.ListEmailByTokenHandler)
-	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler)
+	emailGroup.GET("/by_user/detail/:id", email.GetEmailHandler) // email id
+	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler)   // user id
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(0))
