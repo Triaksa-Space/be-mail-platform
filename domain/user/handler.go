@@ -66,7 +66,7 @@ func ChangePasswordHandler(c echo.Context) error {
 
 	// Check if the old password is correct
 	if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
 	}
 
 	// Hash the new password
