@@ -2,14 +2,17 @@ package user
 
 import (
 	"email-platform/config"
-	"email-platform/pkg"
 	"email-platform/utils"
+	"encoding/csv"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"golang.org/x/exp/rand"
 )
 
 type LoginRequest struct {
@@ -173,32 +176,84 @@ func CreateUserHandler(c echo.Context) error {
 }
 
 func BulkCreateUserHandler(c echo.Context) error {
+	// Get user ID and email from context
+	userID := c.Get("user_id").(int64)
+
+	var emailUser string
+	err := config.DB.Get(&emailUser, `
+        SELECT email 
+        FROM users 
+        WHERE id = ? LIMIT 1`, userID)
+	if err != nil {
+		fmt.Println("Failed to fetch user email", err)
+		return err
+	}
+
 	req := new(BulkCreateUserRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	if len(req.Users) == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "No users provided"})
+	if req.BaseName == "" || req.Quantity == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "BaseName and Quantity are required"})
 	}
 
 	createdUsers := []map[string]string{}
 	skippedUsers := []map[string]string{}
 
-	for i, user := range req.Users {
-		// Check if user exists
+	var names [][]string
+	if req.BaseName == "random" {
+		// Load names from CSV file
+		file, err := os.Open("names.csv")
+		if err != nil {
+			fmt.Println("Failed to open names.csv", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to open names.csv"})
+		}
+		defer file.Close()
+
+		reader := csv.NewReader(file)
+		names, err = reader.ReadAll()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
+		}
+
+		// Shuffle the names to ensure randomness
+		rand.Seed(uint64(time.Now().UnixNano()))
+		rand.Shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
+	}
+
+	for i := 0; i < req.Quantity; i++ {
+		var username string
+		if req.BaseName == "random" {
+			if len(names) == 0 {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "No names available in names.csv"})
+			}
+			name := names[i%len(names)]
+			username = fmt.Sprintf("%s%s@%s", name[0], name[1], req.Domain)
+		} else {
+			username = fmt.Sprintf("%s@%s", req.BaseName, req.Domain)
+			if i > 0 {
+				username = fmt.Sprintf("%s%d@%s", req.BaseName, i, req.Domain)
+			}
+		}
+
+		// Check if username exists
 		var exists bool
-		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", user.Email)
+		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		if exists {
-			skippedUsers = append(skippedUsers, map[string]string{
-				"No":    fmt.Sprintf("%d", i+1),
-				"Email": user.Email,
-			})
-			continue
+		// If username exists, append a number to make it unique
+		counter := 1
+		originalUsername := strings.Split(username, "@")[0]
+		for exists {
+			username = fmt.Sprintf("%s%d@%s", originalUsername, counter, req.Domain)
+			err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+			counter++
 		}
 
 		// Start transaction for this user
@@ -208,7 +263,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 		}
 		defer tx.Rollback()
 
-		hashedPassword, err := utils.HashPassword(user.Password)
+		hashedPassword, err := utils.HashPassword(req.Password) // Use a default password or generate one
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
@@ -216,46 +271,71 @@ func BulkCreateUserHandler(c echo.Context) error {
 		// Insert user
 		_, err = tx.Exec(
 			"INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())",
-			user.Email, hashedPassword,
+			username, hashedPassword,
 		)
 		if err != nil {
+			fmt.Println("Failed to insert user", err)
 			continue
 		}
 
 		// Insert generated email
 		_, err = tx.Exec(
 			"INSERT INTO generated_emails (username, created_at, updated_at) VALUES (?, NOW(), NOW())",
-			user.Email,
+			username,
 		)
 		if err != nil {
+			fmt.Println("Failed to insert generated email", err)
 			continue
 		}
 
-		// Initialize AWS session and create S3 folder
-		sess, _ := pkg.InitAWS()
-		s3Client, _ := pkg.InitS3(sess)
-		err = pkg.CreateBucketFolderEmailUser(s3Client, user.Email)
-		if err != nil {
-			continue
-		}
-
-		// Commit transaction
-		if err := tx.Commit(); err != nil {
-			continue
-		}
-
-		// Collect created user data
 		createdUsers = append(createdUsers, map[string]string{
 			"No":       fmt.Sprintf("%d", i+1),
-			"Email":    user.Email,
-			"Password": user.Password,
+			"Email":    username,
+			"Password": req.Password, // Use the actual password if generated
 		})
+
+		tx.Commit()
 	}
 
+	// Generate the email body with enhanced styling
+	var emailBody strings.Builder
+	emailBody.WriteString(`
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr style="background-color: #f2f2f2;">
+                <th style="border: 1px solid #ddd; padding: 8px;">No</th>
+                <th style="border: 1px solid #ddd; padding: 8px;">Email</th>
+                <th style="border: 1px solid #ddd; padding: 8px;">Password</th>
+            </tr>
+    `)
+
+	for i, user := range createdUsers {
+		emailBody.WriteString(fmt.Sprintf(`
+            <tr>
+                <td style="border: 1px solid #ddd; padding: 8px;">%d</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
+            </tr>
+        `, i+1, user["Email"], user["Password"]))
+	}
+
+	emailBody.WriteString("</table>")
+
+	// // Send email via pkg/aws
+	// err = pkg.SendEmail(req.SendTo, emailUser, "Mailsaja Create Bulk User", emailBody.String(), nil)
+	// if err != nil {
+	// 	fmt.Println("Failed to send email", err)
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{
+	// 		"error": "Failed to send email",
+	// 	})
+	// }
+
+	// Return the response
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"message":       fmt.Sprintf("%d users created successfully", len(createdUsers)),
 		"created_users": createdUsers,
 		"skipped_users": skippedUsers,
+		"send_to":       req.SendTo,
+		"email_body":    emailBody.String(),
 	})
 }
 

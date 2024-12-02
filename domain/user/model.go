@@ -30,10 +30,15 @@ type CreateAdminRequest struct {
 }
 
 type BulkCreateUserRequest struct {
-	Users []struct {
-		Email    string `json:"email" validate:"required,email"`
-		Password string `json:"password" validate:"required,min=6"`
-	} `json:"users" validate:"required,dive"`
+	// Users []struct {
+	// 	Email    string `json:"email" validate:"required,email"`
+	// 	Password string `json:"password" validate:"required,min=6"`
+	// } `json:"users" validate:"required,dive"`
+	BaseName string `json:"base_name"`
+	Domain   string `json:"domain"`
+	Password string `json:"password" validate:"required,min=6"`
+	Quantity int    `json:"quantity" validate:"required"`
+	SendTo   string `json:"send_to" validate:"required"`
 }
 
 type PaginatedUsers struct {
