@@ -18,7 +18,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/google/uuid"
 	"github.com/jhillyerd/enmime"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -101,7 +100,7 @@ func SendEmailHandler(c echo.Context) error {
 	}
 
 	// Prepare attachments and upload to S3
-	// var attachments []pkg.Attachment
+	var attachments []pkg.Attachment
 	var attachmentURLs []string
 	if len(req.Attachments) > 0 {
 		for _, att := range req.Attachments {
@@ -125,39 +124,38 @@ func SendEmailHandler(c echo.Context) error {
 			}
 
 			// Generate a unique key for the attachment in S3
-			uniqueID := uuid.New().String()
-			attachmentKey := fmt.Sprintf("attachments/%s/%s_%s", emailUser, uniqueID, att.Filename)
+			// uniqueID := uuid.New().String()
+			// attachmentKey := fmt.Sprintf("attachments/%s/%s_%s", emailUser, uniqueID, att.Filename)
 
-			// Upload the attachment to S3
-			attachmentURL, err := pkg.UploadAttachment(decodedContent, attachmentKey, att.ContentType)
-			if err != nil {
-				fmt.Printf("Failed to upload attachment %s: %v\n", att.Filename, err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{
-					"error": fmt.Sprintf("Failed to upload attachment %s", att.Filename),
-				})
-			}
+			// // Upload the attachment to S3
+			// attachmentURL, err := pkg.UploadAttachment(decodedContent, attachmentKey, att.ContentType)
+			// if err != nil {
+			// 	fmt.Printf("Failed to upload attachment %s: %v\n", att.Filename, err)
+			// 	return c.JSON(http.StatusInternalServerError, map[string]string{
+			// 		"error": fmt.Sprintf("Failed to upload attachment %s", att.Filename),
+			// 	})
+			// }
 
-			fmt.Println("attachmentURL", attachmentURL)
-			// Append the attachment URL to the list
-			attachmentURLs = append(attachmentURLs, attachmentURL)
+			// // Append the attachment URL to the list
+			// attachmentURLs = append(attachmentURLs, attachmentURL)
 
-			// // // Prepare the attachment for sending email
-			// attachments = append(attachments, pkg.Attachment{
-			// 	Filename:    att.Filename,
-			// 	ContentType: att.ContentType,
-			// 	Content:     decodedContent,
-			// })
+			// // Prepare the attachment for sending email
+			attachments = append(attachments, pkg.Attachment{
+				Filename:    att.Filename,
+				ContentType: att.ContentType,
+				Content:     decodedContent,
+			})
 		}
 	}
 
-	// // Send email via pkg/aws
-	// err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
-	// if err != nil {
-	// 	fmt.Println("Failed to send email", err)
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{
-	// 		"error": "Failed to send email",
-	// 	})
-	// }
+	// Send email via pkg/aws
+	err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
+	if err != nil {
+		fmt.Println("Failed to send email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to send email",
+		})
+	}
 
 	// Save email to database
 	tx, err := config.DB.Begin()

@@ -9,7 +9,7 @@ CREATE TABLE emails (
     preview VARCHAR(255),
     body LONGBLOB,
     body_eml LONGBLOB,
-    attachments VARCHAR(255) NULL,
+    attachments LONGTEXT,
     timestamp DATETIME NOT NULL,
     email_type VARCHAR(255) NOT NULL,
     message_id VARCHAR(255) NULL,
