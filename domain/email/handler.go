@@ -193,13 +193,19 @@ func SendEmailHandler(c echo.Context) error {
 		})
 	}
 
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
+
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
 }
 
 func GetEmailHandler(c echo.Context) error {
-	fmt.Println("GetEmailHandler")
+	userID := c.Get("user_id").(int64)
 	emailID := c.Param("id")
 	// TODO: ATTACHMENT DIBUAT TABLE SENDIRI SAJA
 
@@ -224,6 +230,12 @@ func GetEmailHandler(c echo.Context) error {
 	emailResp.Email = email
 	emailResp.RelativeTime = formatRelativeTime(email.Timestamp)
 	emailResp.ListAttachments = getAttachmentURLs(email.Attachments)
+
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
 
 	return c.JSON(http.StatusOK, emailResp)
 }
@@ -276,7 +288,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
 			body_eml,
             timestamp, 
             created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC LIMIT 10`, userID)
 	if err != nil {
 		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
@@ -288,6 +300,12 @@ func ListEmailByTokenHandler(c echo.Context) error {
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
 		}
+	}
+
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -927,124 +945,12 @@ func html2text(html string) string {
 	return strings.TrimSpace(text)
 }
 
-// func parseEmailFromBucket(msg *mail.Message) (*ParsedEmail, error) {
-// 	parsed := &ParsedEmail{
-// 		MessageID: msg.Header.Get("Message-Id"),
-// 		Subject:   msg.Header.Get("Subject"),
-// 		From:      msg.Header.Get("From"),
-// 		To:        msg.Header.Get("To"),
-// 	}
+func updateLastLogin(userID int64) error {
+	// Update the user's last login time
+	_, err := config.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", time.Now(), userID)
+	if err != nil {
+		return err
+	}
 
-// 	if dateStr := msg.Header.Get("Date"); dateStr != "" {
-// 		if parsedDate, err := time.Parse(time.RFC1123Z, dateStr); err == nil {
-// 			parsed.Date = parsedDate
-// 		}
-// 	}
-
-// 	contentType := msg.Header.Get("Content-Type")
-// 	if strings.HasPrefix(contentType, "multipart/") {
-// 		_, params, err := mime.ParseMediaType(contentType)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to parse content type: %v", err)
-// 		}
-
-// 		mr := multipart.NewReader(msg.Body, params["boundary"])
-// 		var htmlBody, plainBody string
-
-// 		for {
-// 			part, err := mr.NextPart()
-// 			if err == io.EOF {
-// 				break
-// 			}
-// 			if err != nil {
-// 				continue
-// 			}
-
-// 			content, err := io.ReadAll(part)
-// 			if err != nil {
-// 				continue
-// 			}
-
-// 			partType, params, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
-// 			if err != nil {
-// 				continue
-// 			}
-
-// 			disposition, _, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
-// 			isAttachment := err == nil && (disposition == "attachment" || part.FileName() != "")
-
-// 			switch {
-// 			case isAttachment:
-// 				attachment := Attachment{
-// 					Filename:    part.FileName(),
-// 					ContentType: partType,
-// 					Size:        int64(len(content)),
-// 					Content:     content,
-// 				}
-// 				parsed.Attachments = append(parsed.Attachments, attachment)
-// 			case strings.HasPrefix(partType, "multipart/"):
-// 				// Handle nested multipart
-// 				nestedMR := multipart.NewReader(bytes.NewReader(content), params["boundary"])
-// 				handleNestedParts(nestedMR, parsed)
-// 			case strings.HasPrefix(partType, "text/html"):
-// 				htmlBody = string(content)
-// 			case strings.HasPrefix(partType, "text/plain"):
-// 				plainBody = string(content)
-// 			}
-// 		}
-
-// 		// Prioritize HTML body if available
-// 		if htmlBody != "" {
-// 			parsed.Body = htmlBody
-// 			parsed.PlainText = plainBody
-// 		} else if plainBody != "" {
-// 			parsed.PlainText = plainBody
-// 			parsed.Body = textToHTML(plainBody)
-// 		}
-// 	} else {
-// 		// Handle single part message
-// 		body, err := io.ReadAll(msg.Body)
-// 		if err == nil {
-// 			if strings.HasPrefix(contentType, "text/html") {
-// 				parsed.Body = string(body)
-// 			} else {
-// 				parsed.PlainText = string(body)
-// 				parsed.Body = textToHTML(string(body))
-// 			}
-// 		}
-// 	}
-
-// 	return parsed, nil
-// }
-
-// func textToHTML(text string) string {
-// 	// Convert plain text to HTML
-// 	text = html.EscapeString(text)
-// 	text = strings.ReplaceAll(text, "\n", "<br>")
-// 	return fmt.Sprintf("<div style=\"font-family: Arial, sans-serif;\">%s</div>", text)
-// }
-
-// func handleNestedParts(mr *multipart.Reader, parsed *ParsedEmail) {
-// 	for {
-// 		part, err := mr.NextPart()
-// 		if err == io.EOF {
-// 			break
-// 		}
-// 		if err != nil {
-// 			continue
-// 		}
-
-// 		content, err := io.ReadAll(part)
-// 		if err != nil {
-// 			continue
-// 		}
-
-// 		partType := part.Header.Get("Content-Type")
-// 		switch {
-// 		case strings.HasPrefix(partType, "text/html"):
-// 			parsed.Body = string(content)
-// 		case strings.HasPrefix(partType, "text/plain"):
-// 			parsed.PlainText = string(content)
-// 		}
-// 	}
-// }
+	return nil
+}

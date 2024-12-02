@@ -39,7 +39,10 @@ func LoginHandler(c echo.Context) error {
 	}
 
 	// Update last login
-	_, _ = config.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", time.Now(), user.ID)
+	err = updateLastLogin(user.ID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
 
 	return c.JSON(http.StatusOK, map[string]string{"token": token})
 }
@@ -81,6 +84,12 @@ func ChangePasswordHandler(c echo.Context) error {
 	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
@@ -422,6 +431,12 @@ func GetUserMeHandler(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
 
+	// Update last login
+	err = updateLastLogin(user.ID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
+
 	return c.JSON(http.StatusOK, user)
 }
 
@@ -497,4 +512,14 @@ func ListUsersHandler(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, response)
+}
+
+func updateLastLogin(userID int64) error {
+	// Update the user's last login time
+	_, err := config.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", time.Now(), userID)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
