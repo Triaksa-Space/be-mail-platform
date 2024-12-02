@@ -15,6 +15,8 @@ type Email struct {
 	Attachments string    `db:"attachments"` // JSON format
 	MessageID   string    `db:"message_id"`  // Message ID from email provider
 	Timestamp   time.Time `db:"timestamp"`
+	CreatedBy   int64     `db:"created_by"`
+	UpdatedBy   *int      `db:"updated_by"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
 }

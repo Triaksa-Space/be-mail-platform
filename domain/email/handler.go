@@ -18,6 +18,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/google/uuid"
 	"github.com/jhillyerd/enmime"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -100,8 +101,8 @@ func SendEmailHandler(c echo.Context) error {
 	}
 
 	// Prepare attachments and upload to S3
-	var attachments []pkg.Attachment
-	// var attachmentURLs []string
+	// var attachments []pkg.Attachment
+	var attachmentURLs []string
 	if len(req.Attachments) > 0 {
 		for _, att := range req.Attachments {
 			// Strip the data URL prefix if present
@@ -115,7 +116,7 @@ func SendEmailHandler(c echo.Context) error {
 			}
 
 			// Decode base64 content
-			decodedContent, err := base64.StdEncoding.DecodeString(string(content))
+			decodedContent, err := base64.StdEncoding.DecodeString(base64.StdEncoding.EncodeToString(content))
 			if err != nil {
 				fmt.Printf("Failed to decode attachment %s: %v\n", att.Filename, err)
 				return c.JSON(http.StatusBadRequest, map[string]string{
@@ -123,38 +124,40 @@ func SendEmailHandler(c echo.Context) error {
 				})
 			}
 
-			// // Generate a unique key for the attachment in S3
-			// attachmentKey := fmt.Sprintf("attachments/%d/%s", userID, att.Filename)
+			// Generate a unique key for the attachment in S3
+			uniqueID := uuid.New().String()
+			attachmentKey := fmt.Sprintf("attachments/%s/%s_%s", emailUser, uniqueID, att.Filename)
 
-			// // Upload the attachment to S3
-			// attachmentURL, err := pkg.UploadAttachment(decodedContent, attachmentKey, att.ContentType)
-			// if err != nil {
-			// 	fmt.Printf("Failed to upload attachment %s: %v\n", att.Filename, err)
-			// 	return c.JSON(http.StatusInternalServerError, map[string]string{
-			// 		"error": fmt.Sprintf("Failed to upload attachment %s", att.Filename),
-			// 	})
-			// }
+			// Upload the attachment to S3
+			attachmentURL, err := pkg.UploadAttachment(decodedContent, attachmentKey, att.ContentType)
+			if err != nil {
+				fmt.Printf("Failed to upload attachment %s: %v\n", att.Filename, err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{
+					"error": fmt.Sprintf("Failed to upload attachment %s", att.Filename),
+				})
+			}
 
-			// // Append the attachment URL to the list
-			// attachmentURLs = append(attachmentURLs, attachmentURL)
+			fmt.Println("attachmentURL", attachmentURL)
+			// Append the attachment URL to the list
+			attachmentURLs = append(attachmentURLs, attachmentURL)
 
-			// // Prepare the attachment for sending email
-			attachments = append(attachments, pkg.Attachment{
-				Filename:    att.Filename,
-				ContentType: att.ContentType,
-				Content:     decodedContent,
-			})
+			// // // Prepare the attachment for sending email
+			// attachments = append(attachments, pkg.Attachment{
+			// 	Filename:    att.Filename,
+			// 	ContentType: att.ContentType,
+			// 	Content:     decodedContent,
+			// })
 		}
 	}
 
-	// Send email via pkg/aws
-	err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
-	if err != nil {
-		fmt.Println("Failed to send email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to send email",
-		})
-	}
+	// // Send email via pkg/aws
+	// err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
+	// if err != nil {
+	// 	fmt.Println("Failed to send email", err)
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{
+	// 		"error": "Failed to send email",
+	// 	})
+	// }
 
 	// Save email to database
 	tx, err := config.DB.Begin()
@@ -165,7 +168,8 @@ func SendEmailHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	attachmentsJSON, _ := json.Marshal(req.Attachments)
+	attachmentsJSON, _ := json.Marshal(attachmentURLs)
+	fmt.Println("attachmentsJSON", attachmentsJSON)
 	_, err = tx.Exec(`
         INSERT INTO emails (
             user_id,
@@ -184,6 +188,7 @@ func SendEmailHandler(c echo.Context) error {
         VALUES (?, "sent", ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
 		userID, emailUser, "", req.Subject, req.Body, attachmentsJSON, userID, userID)
 	if err != nil {
+		fmt.Println("Failed to save email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to save email",
 		})

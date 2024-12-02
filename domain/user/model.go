@@ -10,6 +10,8 @@ type User struct {
 	LastLogin     *time.Time `db:"last_login"`
 	SentEmails    int        `db:"sent_emails"`
 	LastEmailTime *time.Time `db:"last_email_time"`
+	CreatedBy     int64      `db:"created_by"`
+	UpdatedBy     *int       `db:"updated_by"`
 	CreatedAt     time.Time  `db:"created_at"`
 	UpdatedAt     time.Time  `db:"updated_at"`
 }
