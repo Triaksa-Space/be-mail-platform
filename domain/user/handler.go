@@ -96,6 +96,7 @@ func ChangePasswordHandler(c echo.Context) error {
 }
 
 func CreateUserAdminHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
 	req := new(CreateAdminRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -113,8 +114,8 @@ func CreateUserAdminHandler(c echo.Context) error {
 
 	// Insert the user into the database
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())",
-		req.Username, hashedPassword, 0, // Hardcoded role ID for now
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, NOW(), NOW(), ?, ?)",
+		req.Username, hashedPassword, 0, userID, userID, // Hardcoded role ID for now
 	)
 	if err != nil {
 		fmt.Println("ERROR", err)
@@ -136,6 +137,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 }
 
 func CreateUserHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
 	req := new(CreateUserRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -153,8 +155,8 @@ func CreateUserHandler(c echo.Context) error {
 
 	// Insert the user into the database
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())",
-		req.Email, hashedPassword, 1, // Hardcoded role ID for now
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, NOW(), NOW(), ?, ?)",
+		req.Email, hashedPassword, 1, userID, userID, // Hardcoded role ID for now
 	)
 	if err != nil {
 		fmt.Println("ERROR", err)
@@ -163,23 +165,12 @@ func CreateUserHandler(c echo.Context) error {
 
 	// Insert into table generated_email
 	_, err = config.DB.Exec(
-		"INSERT INTO generated_emails (username, created_at, updated_at) VALUES (?, NOW(), NOW())",
-		req.Email, // Hardcoded role ID for now
+		"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by) VALUES (?, NOW(), NOW(), ?, ?)",
+		req.Email, userID, userID, // Hardcoded role ID for now
 	)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-
-	// // Initialize AWS session
-	// sess, _ := pkg.InitAWS()
-
-	// // Create S3 client
-	// s3Client, _ := pkg.InitS3(sess)
-
-	// err = pkg.CreateBucketFolderEmailUser(s3Client, req.Email)
-	// if err != nil {
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	// }
 
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
 }
@@ -279,8 +270,8 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 		// Insert user
 		_, err = tx.Exec(
-			"INSERT INTO users (email, password, role_id, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())",
-			username, hashedPassword,
+			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by) VALUES (?, ?, 1, NOW(), NOW(), ?, ?)",
+			username, hashedPassword, userID, userID,
 		)
 		if err != nil {
 			fmt.Println("Failed to insert user", err)
@@ -289,8 +280,8 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 		// Insert generated email
 		_, err = tx.Exec(
-			"INSERT INTO generated_emails (username, created_at, updated_at) VALUES (?, NOW(), NOW())",
-			username,
+			"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by) VALUES (?, NOW(), NOW(), ?, ?)",
+			username, userID, userID,
 		)
 		if err != nil {
 			fmt.Println("Failed to insert generated email", err)

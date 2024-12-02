@@ -177,10 +177,12 @@ func SendEmailHandler(c echo.Context) error {
             attachments,
             timestamp,
             created_at,
-            updated_at
+            updated_at,
+			created_by,
+			updated_by
         ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, NOW(), NOW(), NOW())`,
-		userID, emailUser, "", req.Subject, req.Body, attachmentsJSON)
+        VALUES (?, "sent", ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
+		userID, emailUser, "", req.Subject, req.Body, attachmentsJSON, userID, userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to save email",
