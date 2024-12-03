@@ -13,6 +13,7 @@ func RegisterRoutes(e *echo.Echo) {
 	// User routes
 	e.POST("/login", user.LoginHandler)
 	e.POST("/logout", user.LogoutHandler, middleware.JWTMiddleware)
+	// e.POST("/sns/notifications", email.CallbackNotifEmailHandler)
 
 	domainGroup := e.Group("/domain", middleware.JWTMiddleware)
 	domainGroup.GET("/dropdown", domain.GetDropdownDomainHandler, middleware.RoleMiddleware(0)) // Admin-only

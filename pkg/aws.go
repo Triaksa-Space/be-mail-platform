@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/textproto"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -188,4 +189,16 @@ func SendEmail(toAddress, fromAddress, subject, htmlBody string, attachments []A
 	}
 
 	return nil
+}
+
+func ExtractNameFromEmail(email string) string {
+	if email == "" {
+		// Extract the name from the email address before the '@' symbol
+		parts := strings.Split(email, "@")
+		if len(parts) > 0 {
+			return parts[0]
+		}
+		return ""
+	}
+	return email
 }
