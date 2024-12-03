@@ -9,9 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/mail"
+	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -211,6 +214,91 @@ func SendEmailHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
+}
+
+func GetFileEmailToDownloadHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+	// Get email ID and file URL from the request parameters
+	emailID := c.Param("id")
+	fileURL := c.Param("file_url")
+	fmt.Println("emailID", emailID)
+	fmt.Println("fileURL", fileURL)
+
+	// Fetch the email record from the database
+	var email Email
+	err := config.DB.Get(&email, `SELECT id, 
+            user_id, 
+            sender_email, sender_name, 
+            subject, 
+            body,
+			preview,
+			message_id,
+			attachments,
+            timestamp, 
+            created_at, 
+            updated_at  FROM emails WHERE id = ? and user_id = ?`, emailID, userID)
+	if err != nil {
+		fmt.Println("Failed to fetch email", err)
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+	}
+
+	// Extract the file URL from the email record
+	var attachmentURLs []string
+	if err := json.Unmarshal([]byte(email.Attachments), &attachmentURLs); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to parse attachments"})
+	}
+
+	// Find the matching file URL
+	var downloadURL string
+	for _, url := range attachmentURLs {
+		if strings.Contains(url, fileURL) {
+			downloadURL = url
+			break
+		}
+	}
+
+	if downloadURL == "" {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "File not found"})
+	}
+
+	// Parse the S3 URL to get the bucket name and key
+	parsedURL, err := url.Parse(downloadURL)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to parse file URL"})
+	}
+
+	bucket := strings.Split(parsedURL.Host, ".")[0]
+	key := strings.TrimPrefix(parsedURL.Path, "/")
+
+	// Initialize AWS session
+	sess, err := pkg.InitAWS()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to initialize AWS session"})
+	}
+
+	// Create S3 client
+	s3Client := s3.New(sess)
+
+	// Get the object from S3
+	output, err := s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get file from S3"})
+	}
+	defer output.Body.Close()
+
+	// Set the response headers
+	c.Response().Header().Set(echo.HeaderContentType, *output.ContentType)
+	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%s", path.Base(key)))
+
+	// Stream the file to the client
+	if _, err := io.Copy(c.Response().Writer, output.Body); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to stream file"})
+	}
+
+	return nil
 }
 
 func GetEmailHandler(c echo.Context) error {
