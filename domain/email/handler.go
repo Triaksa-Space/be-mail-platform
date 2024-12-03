@@ -136,12 +136,16 @@ func SendEmailHandler(c echo.Context) error {
 			// 	})
 			// }
 
+			// Convert filename to lowercase and replace spaces with underscores
+			filename := strings.ToLower(att.Filename)
+			filename = strings.ReplaceAll(filename, " ", "_")
+
 			// // Append the attachment URL to the list
-			// attachmentURLs = append(attachmentURLs, attachmentURL)
+			attachmentURLs = append(attachmentURLs, filename)
 
 			// // Prepare the attachment for sending email
 			attachments = append(attachments, pkg.Attachment{
-				Filename:    att.Filename,
+				Filename:    filename,
 				ContentType: att.ContentType,
 				Content:     decodedContent,
 			})
@@ -167,7 +171,7 @@ func SendEmailHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
-	fmt.Println("attachmentsJSON", attachmentsJSON)
+	// fmt.Println("attachmentsJSON", attachmentsJSON)
 	_, err = tx.Exec(`
         INSERT INTO emails (
             user_id,
@@ -253,7 +257,6 @@ func ListEmailsHandler(c echo.Context) error {
             sender_email, sender_name, 
             subject,
             body,
-			body_eml,
 			preview,
             timestamp, 
             created_at, 
@@ -290,7 +293,6 @@ func ListEmailByTokenHandler(c echo.Context) error {
             subject, 
             preview,
             body,
-			body_eml,
             timestamp, 
             created_at, 
             updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC LIMIT 10`, userID)
@@ -327,7 +329,6 @@ func ListEmailByIDHandler(c echo.Context) error {
             subject, 
             preview,
             body,
-			body_eml,
             timestamp,
 			message_id,
 			attachments, 
