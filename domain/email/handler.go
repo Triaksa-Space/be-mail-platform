@@ -815,15 +815,15 @@ func SyncEmails() error {
 			}
 			fmt.Println("start storeRawEmail", time.Now())
 
-			// // Delete the email object from S3 after storing
-			// _, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
-			// 	Bucket: aws.String(bucketName),
-			// 	Key:    aws.String(messageID),
-			// })
-			// if err != nil {
-			// 	fmt.Printf("Failed to delete object %s: %v\n", messageID, err)
-			// 	continue
-			// }
+			// Delete the email object from S3 after storing
+			_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
+				Bucket: aws.String(bucketName),
+				Key:    aws.String(messageID),
+			})
+			if err != nil {
+				fmt.Printf("Failed to delete object %s: %v\n", messageID, err)
+				continue
+			}
 		}
 		return !lastPage
 	})
@@ -838,12 +838,12 @@ func SyncEmails() error {
 
 func storeRawEmail(messageID string, emailContent []byte) error {
 	// Extract recipient email to associate with user
-	fmt.Println("start extract", time.Now())
+	// fmt.Println("start extract", time.Now())
 	sendEmailTo, dateEmail, err := extractRecipientEmail(emailContent)
 	if err != nil {
 		return err
 	}
-	fmt.Println("finish extract", time.Now())
+	// fmt.Println("finish extract", time.Now())
 	fmt.Println("sendEmailTo", sendEmailTo)
 	fmt.Println("dateEmail", dateEmail)
 
