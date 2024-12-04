@@ -186,9 +186,9 @@ func SendEmailHandler(c echo.Context) error {
         VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
 		userID, emailUser, preview, req.Subject, req.Body, attachmentsJSON, userID, userID)
 	if err != nil {
-		fmt.Println("Failed to save email", err)
+		fmt.Println("Email sent but Failed to save into DB email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to save email",
+			"error": "Email sent but Failed to save into DB email",
 		})
 	}
 
