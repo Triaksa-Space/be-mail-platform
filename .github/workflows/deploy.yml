@@ -77,9 +77,8 @@ jobs:
           DEPLOY_DIR=$DEPLOY_PATH
           DEPLOY_USER=$EC2_USER
 
-          # Ensure the deployment directory exists and set ownership
-          sudo mkdir -p $DEPLOY_DIR
-          sudo chown -R $DEPLOY_USER:$DEPLOY_USER $DEPLOY_DIR
+          # Ensure the deployment directory exists
+          mkdir -p $DEPLOY_DIR
 
           # Navigate to deployment directory
           cd $DEPLOY_DIR
