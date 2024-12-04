@@ -22,7 +22,16 @@ jobs:
       with:
         go-version: ${{ env.GO_VERSION }}
         check-latest: true
-        cache: 'gomod'
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: Verify Go version
       run: go version
@@ -62,50 +71,61 @@ jobs:
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_KEY }}
         port: 22
-        script_stop: true
-        envs: DEPLOY_PATH
+        envs: DEPLOY_PATH,EC2_USER
         script: |
-          # Ensure the deployment directory exists
-          sudo mkdir -p $DEPLOY_PATH
-          sudo chown -R $USER:$USER $DEPLOY_PATH
+          # Set variables
+          DEPLOY_DIR=$DEPLOY_PATH
+          DEPLOY_USER=$EC2_USER
+
+          # Ensure the deployment directory exists and set ownership
+          sudo mkdir -p $DEPLOY_DIR
+          sudo chown -R $DEPLOY_USER:$DEPLOY_USER $DEPLOY_DIR
+
+          # Navigate to deployment directory
+          cd $DEPLOY_DIR
 
           # Stop existing PM2 processes
           echo "Stopping existing PM2 processes..."
-          sudo pm2 stop go-echo-server || true
-          sudo pm2 stop go-echo-sync || true
+          pm2 stop go-echo-server || true
+          pm2 stop go-echo-sync || true
 
           # Backup current deployment
-          if [ -d "$DEPLOY_PATH/build" ]; then
+          if [ -d "build" ]; then
             echo "Creating backup..."
-            cd $DEPLOY_PATH
             tar -czf backup-$(date +%Y%m%d_%H%M%S).tar.gz build
           fi
 
           # Clean current deployment
           echo "Cleaning current deployment..."
-          rm -rf $DEPLOY_PATH/build
+          rm -rf build
 
           # Extract new deployment
           echo "Extracting new deployment..."
-          tar -xzf $DEPLOY_PATH/deploy.tar.gz -C $DEPLOY_PATH
+          tar -xzf deploy.tar.gz
 
           # Set executable permissions
-          chmod +x $DEPLOY_PATH/build/server
-          chmod +x $DEPLOY_PATH/build/sync
+          chmod +x build/server
+          chmod +x build/sync
 
           # Remove the deployment package
-          rm -f $DEPLOY_PATH/deploy.tar.gz
+          rm -f deploy.tar.gz
 
-          # Ensure PM2 is installed
+          # Ensure Node.js and PM2 are installed
           if ! command -v pm2 &> /dev/null; then
-            echo "Installing PM2..."
+            echo "Installing Node.js and PM2..."
+            curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
             sudo npm install -g pm2
+            # Setup PM2 to start on boot
+            pm2 startup systemd -u $DEPLOY_USER --hp /home/$DEPLOY_USER
           fi
 
           # Start processes with PM2
           echo "Starting processes with PM2..."
-          sudo pm2 start $DEPLOY_PATH/build/server --name go-echo-server -- server
-          sudo pm2 start $DEPLOY_PATH/build/sync --name go-echo-sync -- sync
-          sudo pm2 save
+          pm2 start build/server --name go-echo-server -- server
+          pm2 start build/sync --name go-echo-sync -- sync
+
+          # Save PM2 process list
+          pm2 save
 
           echo "Deployment completed successfully"
