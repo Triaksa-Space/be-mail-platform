@@ -1,10 +1,10 @@
 package routes
 
 import (
-	domain "email-platform/domain/domain_email"
-	"email-platform/domain/email"
-	"email-platform/domain/user"
-	"email-platform/middleware"
+	domain "github.com/Triaksa-Space/be-mail-platform/domain/domain_email"
+	"github.com/Triaksa-Space/be-mail-platform/domain/email"
+	"github.com/Triaksa-Space/be-mail-platform/domain/user"
+	"github.com/Triaksa-Space/be-mail-platform/middleware"
 
 	"github.com/labstack/echo/v4"
 )

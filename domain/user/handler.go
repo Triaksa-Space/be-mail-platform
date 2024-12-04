@@ -1,8 +1,6 @@
 package user
 
 import (
-	"email-platform/config"
-	"email-platform/utils"
 	"encoding/csv"
 	"fmt"
 	"net/http"
@@ -10,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/utils"
 
 	"github.com/labstack/echo/v4"
 	"golang.org/x/exp/rand"

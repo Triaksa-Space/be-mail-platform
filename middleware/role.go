@@ -1,8 +1,9 @@
 package middleware
 
 import (
-	"email-platform/config"
 	"net/http"
+
+	"github.com/Triaksa-Space/be-mail-platform/config"
 
 	"github.com/labstack/echo/v4"
 )

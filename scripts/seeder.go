@@ -1,14 +1,15 @@
 package main
 
 import (
-	"email-platform/config"
-	domain "email-platform/domain/domain_email"
-	"email-platform/domain/email"
-	"email-platform/domain/user"
-	"email-platform/utils"
 	"fmt"
 	"log"
 	"time"
+
+	"github.com/Triaksa-Space/be-mail-platform/config"
+	domain "github.com/Triaksa-Space/be-mail-platform/domain/domain_email"
+	"github.com/Triaksa-Space/be-mail-platform/domain/email"
+	"github.com/Triaksa-Space/be-mail-platform/domain/user"
+	"github.com/Triaksa-Space/be-mail-platform/utils"
 )
 
 func main() {

@@ -1,9 +1,10 @@
 package domain
 
 import (
-	"email-platform/config"
 	"fmt"
 	"net/http"
+
+	"github.com/Triaksa-Space/be-mail-platform/config"
 
 	"github.com/labstack/echo/v4"
 )

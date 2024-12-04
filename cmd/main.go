@@ -1,12 +1,13 @@
 package main
 
 import (
-	"email-platform/config"
-	"email-platform/domain/email"
-	"email-platform/routes"
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/domain/email"
+	"github.com/Triaksa-Space/be-mail-platform/routes"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"

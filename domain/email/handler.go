@@ -2,9 +2,6 @@ package email
 
 import (
 	"bytes"
-	"email-platform/config"
-	"email-platform/domain/user"
-	"email-platform/pkg"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +17,10 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/domain/user"
+	"github.com/Triaksa-Space/be-mail-platform/pkg"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -608,6 +609,151 @@ func formatRelativeTime(t time.Time) string {
 // 	return c.JSON(http.StatusOK, emails)
 // }
 
+// type RawEmailBatch struct {
+// 	MessageIDs    []string
+// 	EmailContents [][]byte
+// }
+
+// func SyncEmails() error {
+// 	fmt.Println("Syncing emails...", time.Now())
+
+// 	// AWS S3 configuration
+// 	bucketName := viper.GetString("S3_BUCKET_NAME")
+// 	prefix := viper.GetString("S3_PREFIX")
+
+// 	// Initialize AWS session
+// 	sess, err := pkg.InitAWS()
+// 	if err != nil {
+// 		return fmt.Errorf("failed to initialize AWS session: %v", err)
+// 	}
+
+// 	// Create S3 client
+// 	s3Client := s3.New(sess)
+
+// 	// Channel to send raw emails to the worker
+// 	rawEmailChan := make(chan RawEmailBatch, 1000) // Buffered channel
+
+// 	// WaitGroup to wait for workers to finish
+// 	var wg sync.WaitGroup
+
+// 	// Start worker pool
+// 	numWorkers := 1 //runtime.NumCPU() * 2 // Adjust as needed
+// 	for i := 0; i < numWorkers; i++ {
+// 		wg.Add(1)
+// 		go emailBatchWorker(i, &wg, rawEmailChan)
+// 	}
+
+// 	// List objects in S3 bucket and collect them into batches
+// 	batchSize := 100 // Define batch size
+// 	currentBatch := RawEmailBatch{
+// 		MessageIDs:    []string{},
+// 		EmailContents: [][]byte{},
+// 	}
+
+// 	err = s3Client.ListObjectsV2Pages(&s3.ListObjectsV2Input{
+// 		Bucket: aws.String(bucketName),
+// 		Prefix: aws.String(prefix),
+// 	}, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+// 		for _, obj := range page.Contents {
+// 			messageID := *obj.Key
+// 			if messageID == "" {
+// 				continue
+// 			}
+
+// 			// Get the email object
+// 			output, err := s3Client.GetObject(&s3.GetObjectInput{
+// 				Bucket: aws.String(bucketName),
+// 				Key:    aws.String(messageID),
+// 			})
+// 			if err != nil {
+// 				fmt.Printf("Failed to get object %s: %v\n", messageID, err)
+// 				continue
+// 			}
+// 			defer output.Body.Close()
+
+// 			// Read the email content
+// 			buf := new(bytes.Buffer)
+// 			buf.ReadFrom(output.Body)
+// 			emailContent := buf.Bytes()
+
+// 			// Append to current batch
+// 			currentBatch.MessageIDs = append(currentBatch.MessageIDs, messageID)
+// 			currentBatch.EmailContents = append(currentBatch.EmailContents, emailContent)
+
+// 			// If batch size is reached, send to worker
+// 			if len(currentBatch.MessageIDs) >= batchSize {
+// 				rawEmailChan <- currentBatch
+// 				currentBatch = RawEmailBatch{
+// 					MessageIDs:    []string{},
+// 					EmailContents: [][]byte{},
+// 				}
+// 			}
+// 		}
+// 		return !lastPage
+// 	})
+
+// 	if err != nil {
+// 		close(rawEmailChan)
+// 		return fmt.Errorf("failed to list objects: %v", err)
+// 	}
+
+// 	// Send any remaining emails in the last batch
+// 	if len(currentBatch.MessageIDs) > 0 {
+// 		rawEmailChan <- currentBatch
+// 	}
+
+// 	// Close the channel to signal workers to finish
+// 	close(rawEmailChan)
+
+// 	// Wait for all workers to finish
+// 	wg.Wait()
+
+// 	fmt.Println("Sync completed.")
+// 	return nil
+// }
+
+// func emailBatchWorker(workerID int, wg *sync.WaitGroup, rawEmailChan <-chan RawEmailBatch) {
+// 	fmt.Println("Worker", workerID, "starting", time.Now())
+// 	defer wg.Done()
+// 	for batch := range rawEmailChan {
+// 		fmt.Printf("Worker %d processing batch of %d emails\n", workerID, len(batch.MessageIDs))
+// 		err := insertRawEmailBatch(batch)
+// 		if err != nil {
+// 			fmt.Printf("Worker %d: Error inserting batch: %v\n", workerID, err)
+// 		}
+// 	}
+// 	fmt.Println("Worker", workerID, "finish", time.Now())
+// 	fmt.Printf("Worker %d exiting\n", workerID)
+// }
+
+// func insertRawEmailBatch(batch RawEmailBatch) error {
+// 	fmt.Println("Inserting batch of emails...", time.Now())
+// 	fmt.Println("Batch size", len(batch.MessageIDs))
+// 	// Prepare the SQL statement
+// 	query := `
+//         INSERT INTO incoming_emails (message_id, email_data, created_at, processed)
+//         VALUES `
+// 	valueStrings := []string{}
+// 	valueArgs := []interface{}{}
+
+// 	for i := range batch.MessageIDs {
+// 		valueStrings = append(valueStrings, "(?, ?, NOW(), false)")
+// 		valueArgs = append(valueArgs, batch.MessageIDs[i], batch.EmailContents[i])
+// 	}
+
+// 	query += strings.Join(valueStrings, ",")
+// 	query += ";"
+
+// 	// Execute the batch insert
+// 	_, err := config.DB.Exec(query, valueArgs...)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to insert raw email batch: %v", err)
+// 	}
+// 	fmt.Println("Finish batch of emails.", time.Now())
+// 	return nil
+// }
+
+// OLD SYNC EMAILS
 func SyncEmails() error {
 	fmt.Println("Syncing emails...", time.Now())
 	// AWS S3 configuration

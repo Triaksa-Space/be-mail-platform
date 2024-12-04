@@ -1,4 +1,4 @@
-module email-platform
+module github.com/Triaksa-Space/be-mail-platform
 
 go 1.23.2
 
