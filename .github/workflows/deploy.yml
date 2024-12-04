@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  GO_VERSION: 1.20
+  GO_VERSION: '1.20'
   DEPLOY_PATH: /var/www/backend
 
 jobs:
@@ -21,7 +21,11 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: ${{ env.GO_VERSION }}
-        cache: true
+        check-latest: true
+        cache: 'gomod'
+
+    - name: Verify Go version
+      run: go version
 
     - name: Tidy Go modules
       run: go mod tidy
@@ -65,10 +69,10 @@ jobs:
           sudo mkdir -p $DEPLOY_PATH
           sudo chown -R $USER:$USER $DEPLOY_PATH
 
-          # Stop existing services if they are running
-          echo "Stopping existing services..."
-          sudo systemctl stop go-echo-server.service || true
-          sudo systemctl stop go-echo-sync.service || true
+          # Stop existing PM2 processes
+          echo "Stopping existing PM2 processes..."
+          sudo pm2 stop go-echo-server || true
+          sudo pm2 stop go-echo-sync || true
 
           # Backup current deployment
           if [ -d "$DEPLOY_PATH/build" ]; then
@@ -92,50 +96,16 @@ jobs:
           # Remove the deployment package
           rm -f $DEPLOY_PATH/deploy.tar.gz
 
-          # Create systemd service files
-          echo "Setting up systemd services..."
+          # Ensure PM2 is installed
+          if ! command -v pm2 &> /dev/null; then
+            echo "Installing PM2..."
+            sudo npm install -g pm2
+          fi
 
-          sudo tee /etc/systemd/system/go-echo-server.service > /dev/null <<EOT
-          [Unit]
-          Description=Go Echo Server
-          After=network.target
-
-          [Service]
-          Type=simple
-          User=$USER
-          WorkingDirectory=$DEPLOY_PATH
-          ExecStart=$DEPLOY_PATH/build/server server
-          Restart=on-failure
-
-          [Install]
-          WantedBy=multi-user.target
-          EOT
-
-          sudo tee /etc/systemd/system/go-echo-sync.service > /dev/null <<EOT
-          [Unit]
-          Description=Go Echo Sync
-          After=network.target
-
-          [Service]
-          Type=simple
-          User=$USER
-          WorkingDirectory=$DEPLOY_PATH
-          ExecStart=$DEPLOY_PATH/build/sync sync
-          Restart=on-failure
-
-          [Install]
-          WantedBy=multi-user.target
-          EOT
-
-          # Reload systemd to apply new service files
-          sudo systemctl daemon-reload
-
-          # Start and enable services
-          echo "Starting services..."
-          sudo systemctl start go-echo-server.service
-          sudo systemctl enable go-echo-server.service
-
-          sudo systemctl start go-echo-sync.service
-          sudo systemctl enable go-echo-sync.service
+          # Start processes with PM2
+          echo "Starting processes with PM2..."
+          sudo pm2 start $DEPLOY_PATH/build/server --name go-echo-server -- server
+          sudo pm2 start $DEPLOY_PATH/build/sync --name go-echo-sync -- sync
+          sudo pm2 save
 
           echo "Deployment completed successfully"
