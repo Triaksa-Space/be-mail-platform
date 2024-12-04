@@ -52,7 +52,17 @@ jobs:
     - name: Prepare deployment package
       run: |
         echo "Creating deployment package..."
+        
+        # Create deployment package
         tar -czf deploy.tar.gz build
+
+        # Verify package
+        if [ ! -s "deploy.tar.gz" ]; then
+          echo "❌ Deployment package is empty"
+          exit 1
+        fi
+        
+        echo "✅ Deployment package created ($(ls -lh deploy.tar.gz | awk '{print $5}'))"
 
     - name: Upload deployment package to EC2
       uses: appleboy/scp-action@v0.1.4
