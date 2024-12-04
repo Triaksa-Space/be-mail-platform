@@ -9,15 +9,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -75,14 +77,11 @@ func SendEmailHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
 
-	var emailUser string
-	err := config.DB.Get(&emailUser, `
-        SELECT email 
-        FROM users 
-        WHERE id = ? LIMIT 1`, userID)
+	emailUser, err := getUserEmail(userID)
 	if err != nil {
-		fmt.Println("Failed to fetch user email", err)
-		return err
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
 	}
 
 	// Check email limit
@@ -371,8 +370,21 @@ func SentEmailByIDHandler(c echo.Context) error {
 func ListEmailByTokenHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 
+	emailUser, err := getUserEmail(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
+	}
+
+	err = processIncomingEmails(emailUser)
+	if err != nil {
+		fmt.Println("Failed to process incoming emails", err)
+	}
+	fmt.Println("Finish refresh internal mailbox")
+
 	var emails []Email
-	err := config.DB.Select(&emails, `SELECT id, 
+	err = config.DB.Select(&emails, `SELECT id, 
             user_id, 
             sender_email, sender_name, 
             subject, 
@@ -380,7 +392,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC LIMIT 10`, userID)
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
 	if err != nil {
 		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
@@ -404,10 +416,29 @@ func ListEmailByTokenHandler(c echo.Context) error {
 }
 
 func ListEmailByIDHandler(c echo.Context) error {
-	userID := c.Param("id")
+	userIDStr := c.Param("id")
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid user ID",
+		})
+	}
+
+	emailUser, err := getUserEmail(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
+	}
+
+	err = processIncomingEmails(emailUser)
+	if err != nil {
+		fmt.Println("Failed to process incoming emails", err)
+	}
+	fmt.Println("Finish refresh internal mailbox")
 
 	var emails []Email
-	err := config.DB.Select(&emails, `SELECT id, 
+	err = config.DB.Select(&emails, `SELECT id, 
             user_id, 
             sender_email, 
 			sender_name, 
@@ -577,102 +608,135 @@ func formatRelativeTime(t time.Time) string {
 // 	return c.JSON(http.StatusOK, emails)
 // }
 
-func CallbackNotifEmailHandler(c echo.Context) error {
-	bodyBytes, err := ioutil.ReadAll(c.Request().Body)
-	if err != nil {
-		log.Println("Error reading request body:", err)
-		return c.NoContent(http.StatusBadRequest)
-	}
+func SyncEmails() error {
+	fmt.Println("Syncing emails...", time.Now())
+	// AWS S3 configuration
+	bucketName := viper.GetString("S3_BUCKET_NAME")
+	prefix := viper.GetString("S3_PREFIX")
 
-	var message pkg.SNSMessage
-	if err := json.Unmarshal(bodyBytes, &message); err != nil {
-		log.Println("Error unmarshaling SNS message:", err)
-		return c.NoContent(http.StatusBadRequest)
-	}
+	fmt.Println("bucketName", bucketName)
+	fmt.Println("prefix", prefix)
+	fmt.Println(viper.GetString("AWS_REGION"))
 
-	// Validate the SNS message
-	if err := pkg.VerifySNSMessage(message); err != nil {
-		log.Println("SNS message verification failed:", err)
-		return c.NoContent(http.StatusForbidden)
-	}
-
-	switch message.Type {
-	case "SubscriptionConfirmation":
-		// Confirm the subscription
-		if err := pkg.ConfirmSubscription(message.SubscribeURL); err != nil {
-			log.Println("Error confirming subscription:", err)
-			return c.NoContent(http.StatusInternalServerError)
-		}
-		log.Println("Subscription confirmed.")
-	case "Notification":
-		// Process the notification
-		if err := processNotification(message.Message); err != nil {
-			log.Println("Error processing notification:", err)
-			return c.NoContent(http.StatusInternalServerError)
-		}
-	default:
-		log.Println("Unhandled message type:", message.Type)
-	}
-
-	return c.String(http.StatusOK, "OK")
-}
-
-func processNotification(message string) error {
-	var s3Event pkg.S3Event
-	if err := json.Unmarshal([]byte(message), &s3Event); err != nil {
-		return err
-	}
-
-	// Iterate over the records (usually just one)
-	for _, record := range s3Event.Records {
-		bucketName := record.S3.Bucket.Name
-		objectKey, err := url.QueryUnescape(record.S3.Object.Key)
-		if err != nil {
-			return err
-		}
-
-		log.Printf("New object in S3 - Bucket: %s, Key: %s\n", bucketName, objectKey)
-
-		// Call your SyncFunc with the bucket and object key
-		if err := SyncBucketInboxFunc(bucketName, objectKey); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func SyncBucketInboxFunc(bucketName, objectKey string) error {
-	// Initialize AWS SDK session
+	// Initialize AWS session
 	sess, err := pkg.InitAWS()
 	if err != nil {
-		fmt.Println("Failed to initialize AWS session:", err)
+		return fmt.Errorf("failed to initialize AWS session: %v", err)
 	}
-	s3Svc := s3.New(sess)
 
-	// Get the object from S3
-	obj, err := s3Svc.GetObject(&s3.GetObjectInput{
+	// Create S3 client
+	s3Client := s3.New(sess)
+
+	// List objects in S3 bucket
+	err = s3Client.ListObjectsV2Pages(&s3.ListObjectsV2Input{
 		Bucket: aws.String(bucketName),
-		Key:    aws.String(objectKey),
+		Prefix: aws.String(prefix),
+	}, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
+		fmt.Println("Processing ", len(page.Contents))
+		for _, obj := range page.Contents {
+			messageID := *obj.Key
+			if messageID == "" {
+				continue
+			}
+			fmt.Println("messageID", messageID)
+
+			fmt.Println("start GetObject", time.Now())
+			// Get the email object
+			output, err := s3Client.GetObject(&s3.GetObjectInput{
+				Bucket: aws.String(bucketName),
+				Key:    aws.String(messageID),
+			})
+			if err != nil {
+				fmt.Printf("Failed to get object %s: %v\n", messageID, err)
+				continue
+			}
+			defer output.Body.Close()
+			fmt.Println("finish GetObject", time.Now())
+
+			fmt.Println("start ReadFrom", time.Now())
+			// Read the email content
+			buf := new(bytes.Buffer)
+			buf.ReadFrom(output.Body)
+			emailContent := buf.Bytes()
+			fmt.Println("finish ReadFrom", time.Now())
+
+			fmt.Println("start storeRawEmail", time.Now())
+			// Store the raw email in the database
+			err = storeRawEmail(messageID, emailContent)
+			if err != nil {
+				fmt.Printf("Failed to store raw email %s: %v\n", messageID, err)
+				continue
+			}
+			fmt.Println("start storeRawEmail", time.Now())
+
+			// // Delete the email object from S3 after storing
+			// _, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
+			// 	Bucket: aws.String(bucketName),
+			// 	Key:    aws.String(messageID),
+			// })
+			// if err != nil {
+			// 	fmt.Printf("Failed to delete object %s: %v\n", messageID, err)
+			// 	continue
+			// }
+		}
+		return !lastPage
 	})
+
+	if err != nil {
+		return fmt.Errorf("failed to list objects: %v", err)
+	}
+
+	fmt.Println("Sync completed.", time.Now())
+	return nil
+}
+
+func storeRawEmail(messageID string, emailContent []byte) error {
+	// Extract recipient email to associate with user
+	fmt.Println("start extract", time.Now())
+	sendEmailTo, dateEmail, err := extractRecipientEmail(emailContent)
 	if err != nil {
 		return err
 	}
-	defer obj.Body.Close()
+	fmt.Println("finish extract", time.Now())
+	fmt.Println("sendEmailTo", sendEmailTo)
+	fmt.Println("dateEmail", dateEmail)
 
-	// Read the object content
-	body, err := io.ReadAll(obj.Body)
+	fmt.Println("start insert", time.Now())
+	// Insert raw email into the raw_emails table
+	_, err = config.DB.Exec(`
+	    INSERT INTO incoming_emails (
+			email_send_to,
+	        message_id,
+	        email_data,
+	        created_at,
+	        processed,
+			email_date
+	    ) VALUES (?, ?, ?, NOW(), false, ?)
+	`, sendEmailTo, messageID, emailContent, dateEmail)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to insert raw email: %v", err)
 	}
-
-	fmt.Println("Email content:", string(body))
-
-	// Process the email content
-	// For example, parse the email and store it in your database
-	// ...
+	// err = processIncomingEmails(sendEmailTo)
+	// fmt.Println("Err Process Incoming Emails", err)
+	fmt.Println("finish insert", time.Now())
 
 	return nil
+}
+
+func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
+	env, err := enmime.ReadEnvelope(bytes.NewReader(emailContent))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to parse email: %v", err)
+	}
+
+	dateT, _ := env.Date()
+
+	toAddresses := parseAddresses(env.GetHeader("To"))
+	if len(toAddresses) == 0 {
+		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+	}
+
+	return toAddresses[0].Address, dateT, nil
 }
 
 func SyncBucketInboxHandler(c echo.Context) error {
@@ -860,13 +924,6 @@ func parseAddresses(addresses string) []EmailAddress {
 	return result
 }
 
-func getPreview(body string, length int) string {
-	if len(body) > length {
-		return body[:length]
-	}
-	return body
-}
-
 func generatePreview(plainText string, htmlBody string) string {
 	var text string
 	if plainText != "" {
@@ -883,10 +940,10 @@ func generatePreview(plainText string, htmlBody string) string {
 }
 
 // // Simple HTML to text converter (you might want to use a proper library)
-func html2text(html string) string {
+func html2text(contentHTML string) string {
 	// This is a very basic implementation
 	// Consider using a proper HTML to text library
-	text := html
+	text := contentHTML
 	text = strings.ReplaceAll(text, "<br>", "\n")
 	text = strings.ReplaceAll(text, "<br/>", "\n")
 	text = strings.ReplaceAll(text, "<br />", "\n")
@@ -898,9 +955,22 @@ func html2text(html string) string {
 	text = re.ReplaceAllString(text, "")
 
 	// Decode HTML entities
-	// text = html.UnescapeString(text)
+	text = html.UnescapeString(text)
+
+	// Remove non-printable characters
+	text = removeNonPrintable(text)
 
 	return strings.TrimSpace(text)
+}
+
+func removeNonPrintable(s string) string {
+	var buf bytes.Buffer
+	for _, r := range s {
+		if unicode.IsPrint(r) {
+			buf.WriteRune(r)
+		}
+	}
+	return buf.String()
 }
 
 func updateLastLogin(userID int64) error {
@@ -911,4 +981,151 @@ func updateLastLogin(userID int64) error {
 	}
 
 	return nil
+}
+
+func processIncomingEmails(emailSendTo string) error {
+	fmt.Println("START processIncomingEmails", time.Now())
+	// Fetch unprocessed emails for the user from incoming_emails table
+	var rawEmails []struct {
+		ID        int64     `db:"id"`
+		MessageID string    `db:"message_id"`
+		EmailData []byte    `db:"email_data"`
+		CreatedAt time.Time `db:"created_at"`
+	}
+	err := config.DB.Select(&rawEmails, `
+        SELECT id, message_id, email_data, created_at
+        FROM incoming_emails
+        WHERE email_send_to = ? AND processed = FALSE
+    `, emailSendTo)
+	if err != nil {
+		return fmt.Errorf("failed to fetch raw emails: %v", err)
+	}
+
+	fmt.Println("Start processIncomingEmails", len(rawEmails))
+	for _, rawEmail := range rawEmails {
+		// Parse the email content
+		env, err := enmime.ReadEnvelope(bytes.NewReader(rawEmail.EmailData))
+		if err != nil {
+			fmt.Printf("Failed to parse email %s: %v\n", rawEmail.MessageID, err)
+			continue
+		}
+
+		dateT, _ := env.Date()
+
+		// Extract email information
+		email := &PEmail{
+			ID:       rawEmail.MessageID,
+			From:     parseAddresses(env.GetHeader("From")),
+			To:       parseAddresses(env.GetHeader("To")),
+			Cc:       parseAddresses(env.GetHeader("Cc")),
+			Bcc:      parseAddresses(env.GetHeader("Bcc")),
+			Subject:  env.GetHeader("Subject"),
+			Date:     dateT,
+			TextBody: env.Text,
+			HTMLBody: env.HTML,
+		}
+
+		// Handle attachments
+		var attachmentURLs []string
+		for _, att := range env.Attachments {
+			attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
+			attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
+			if err != nil {
+				log.Printf("Failed to upload attachment: %v", err)
+				continue
+			}
+			attachmentURLs = append(attachmentURLs, attachmentURL)
+		}
+		attachmentsJSON, _ := json.Marshal(attachmentURLs)
+
+		// Select the email body and generate a preview
+		var bodyEmail string
+		if email.HTMLBody != "" {
+			bodyEmail = email.HTMLBody
+		} else {
+			bodyEmail = email.TextBody
+		}
+		preview := generatePreview(email.TextBody, email.HTMLBody)
+		fmt.Println("preview", preview)
+
+		// Get the user ID from the email address
+		var userID int64
+		err = config.DB.Get(&userID, `
+            SELECT id 
+            FROM users 
+            WHERE email = ?`, emailSendTo)
+		if err != nil {
+			fmt.Printf("Failed to get user ID for email %s: %v\n", emailSendTo, err)
+			continue
+		}
+
+		// Insert the processed email into the emails table
+		_, err = config.DB.Exec(`
+            INSERT INTO emails (
+                user_id,
+                sender_email,
+                sender_name,
+                subject,
+                preview,
+                body,
+                email_type,
+                attachments,
+                message_id,
+                timestamp,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+        `,
+			userID,
+			email.From[0].Address,
+			email.From[0].Name,
+			email.Subject,
+			preview,
+			bodyEmail,
+			"inbox", // Set email_type as needed
+			string(attachmentsJSON),
+			email.ID,
+			email.Date,
+		)
+		if err != nil {
+			fmt.Printf("Failed to insert email %s into DB: %v\n", email.ID, err)
+			continue
+		}
+
+		// // Mark the raw email as processed
+		// _, err = config.DB.Exec(`
+		//     UPDATE incoming_emails
+		//     SET processed = TRUE, processed_at = NOW()
+		//     WHERE id = ?
+		// `, rawEmail.ID)
+		// if err != nil {
+		// 	fmt.Printf("Failed to update raw email %s: %v\n", rawEmail.MessageID, err)
+		// 	continue
+		// }
+		// Delete the raw email after successful processing
+		_, err = config.DB.Exec(`
+		DELETE FROM incoming_emails
+		WHERE id = ?
+		`, rawEmail.ID)
+		if err != nil {
+			fmt.Printf("Failed to delete raw email %s: %v\n", rawEmail.MessageID, err)
+			continue
+		}
+	}
+	fmt.Println("Finish processIncomingEmails", time.Now())
+
+	return nil
+}
+
+func getUserEmail(userID int64) (string, error) {
+	var emailUser string
+	err := config.DB.Get(&emailUser, `
+        SELECT email 
+        FROM users 
+        WHERE id = ? LIMIT 1`, userID)
+	if err != nil {
+		fmt.Println("Failed to fetch user email:", err)
+		return "", err
+	}
+	return emailUser, nil
 }

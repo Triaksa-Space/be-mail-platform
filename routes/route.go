@@ -35,10 +35,10 @@ func RegisterRoutes(e *echo.Echo) {
 	// Email routes
 	emailGroup := e.Group("/email", middleware.JWTMiddleware)
 	emailGroup.GET("/:id", email.GetEmailHandler, middleware.RoleMiddleware(0))
-	emailGroup.GET("/by_user", email.ListEmailByTokenHandler)
+	emailGroup.GET("/by_user", email.ListEmailByTokenHandler)                                   // - sync mailbox
 	emailGroup.GET("/by_user/detail/:id", email.GetEmailHandler)                                // email id
 	emailGroup.GET("/by_user/download/file/:id/:file_url", email.GetFileEmailToDownloadHandler) // email id
-	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(0))    // user id
+	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(0))    // user id - sync mailbox
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(0))

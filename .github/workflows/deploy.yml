@@ -1,0 +1,138 @@
+name: Deploy Go Echo App to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  GO_VERSION: 1.20
+  DEPLOY_PATH: /var/www/backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go environment
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+
+    - name: Build server binary
+      run: |
+        mkdir -p build
+        go build -o build/server cmd/main.go
+
+    - name: Build sync binary
+      run: |
+        mkdir -p build
+        go build -o build/sync cmd/main.go
+
+    - name: Prepare deployment package
+      run: |
+        echo "Creating deployment package..."
+        tar -czf deploy.tar.gz build
+
+    - name: Upload deployment package to EC2
+      uses: appleboy/scp-action@v0.1.4
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_KEY }}
+        port: 22
+        source: "deploy.tar.gz"
+        target: "${{ env.DEPLOY_PATH }}"
+
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_KEY }}
+        port: 22
+        script_stop: true
+        envs: DEPLOY_PATH
+        script: |
+          # Ensure the deployment directory exists
+          sudo mkdir -p $DEPLOY_PATH
+          sudo chown -R $USER:$USER $DEPLOY_PATH
+
+          # Stop existing services if they are running
+          echo "Stopping existing services..."
+          sudo systemctl stop go-echo-server.service || true
+          sudo systemctl stop go-echo-sync.service || true
+
+          # Backup current deployment
+          if [ -d "$DEPLOY_PATH/build" ]; then
+            echo "Creating backup..."
+            cd $DEPLOY_PATH
+            tar -czf backup-$(date +%Y%m%d_%H%M%S).tar.gz build
+          fi
+
+          # Clean current deployment
+          echo "Cleaning current deployment..."
+          rm -rf $DEPLOY_PATH/build
+
+          # Extract new deployment
+          echo "Extracting new deployment..."
+          tar -xzf $DEPLOY_PATH/deploy.tar.gz -C $DEPLOY_PATH
+
+          # Set executable permissions
+          chmod +x $DEPLOY_PATH/build/server
+          chmod +x $DEPLOY_PATH/build/sync
+
+          # Remove the deployment package
+          rm -f $DEPLOY_PATH/deploy.tar.gz
+
+          # Create systemd service files
+          echo "Setting up systemd services..."
+
+          sudo tee /etc/systemd/system/go-echo-server.service > /dev/null <<EOT
+          [Unit]
+          Description=Go Echo Server
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=$USER
+          WorkingDirectory=$DEPLOY_PATH
+          ExecStart=$DEPLOY_PATH/build/server server
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+          EOT
+
+          sudo tee /etc/systemd/system/go-echo-sync.service > /dev/null <<EOT
+          [Unit]
+          Description=Go Echo Sync
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=$USER
+          WorkingDirectory=$DEPLOY_PATH
+          ExecStart=$DEPLOY_PATH/build/sync sync
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+          EOT
+
+          # Reload systemd to apply new service files
+          sudo systemctl daemon-reload
+
+          # Start and enable services
+          echo "Starting services..."
+          sudo systemctl start go-echo-server.service
+          sudo systemctl enable go-echo-server.service
+
+          sudo systemctl start go-echo-sync.service
+          sudo systemctl enable go-echo-sync.service
+
+          echo "Deployment completed successfully"
