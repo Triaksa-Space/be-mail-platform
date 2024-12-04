@@ -378,7 +378,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
 		})
 	}
 
-	err = processIncomingEmails(emailUser)
+	err = processIncomingEmails(userID, emailUser)
 	if err != nil {
 		fmt.Println("Failed to process incoming emails", err)
 	}
@@ -393,7 +393,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC LIMIT 10`, userID)
 	if err != nil {
 		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
@@ -432,7 +432,7 @@ func ListEmailByIDHandler(c echo.Context) error {
 		})
 	}
 
-	err = processIncomingEmails(emailUser)
+	err = processIncomingEmails(userID, emailUser)
 	if err != nil {
 		fmt.Println("Failed to process incoming emails", err)
 	}
@@ -1129,8 +1129,40 @@ func updateLastLogin(userID int64) error {
 	return nil
 }
 
-func processIncomingEmails(emailSendTo string) error {
+func processIncomingEmails(userID int64, emailSendTo string) error {
 	fmt.Println("START processIncomingEmails", time.Now())
+
+	// Check the number of emails for the user
+	var emailCount int
+	err := config.DB.Get(&emailCount, `
+		SELECT COUNT(*) 
+		FROM emails 
+		WHERE user_id = ?
+	`, userID)
+	if err != nil {
+		fmt.Printf("Failed to count emails for user %d: %v\n", userID, err)
+		return err
+	}
+
+	// Delete the oldest email if the user has 10 emails
+	if emailCount >= 10 {
+		fmt.Println("Deleting oldest email for user", userID)
+		_, err = config.DB.Exec(`
+			DELETE FROM emails 
+			WHERE id = (
+				SELECT id 
+				FROM emails 
+				WHERE user_id = ? 
+				ORDER BY created_at ASC 
+				LIMIT 1
+			)
+		`, userID)
+		if err != nil {
+			fmt.Printf("Failed to delete oldest email for user %d: %v\n", userID, err)
+			return err
+		}
+	}
+
 	// Fetch unprocessed emails for the user from incoming_emails table
 	var rawEmails []struct {
 		ID        int64     `db:"id"`
@@ -1138,7 +1170,7 @@ func processIncomingEmails(emailSendTo string) error {
 		EmailData []byte    `db:"email_data"`
 		CreatedAt time.Time `db:"created_at"`
 	}
-	err := config.DB.Select(&rawEmails, `
+	err = config.DB.Select(&rawEmails, `
         SELECT id, message_id, email_data, created_at
         FROM incoming_emails
         WHERE email_send_to = ? AND processed = FALSE
