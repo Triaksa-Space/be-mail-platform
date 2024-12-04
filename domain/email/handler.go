@@ -125,19 +125,6 @@ func SendEmailHandler(c echo.Context) error {
 				})
 			}
 
-			// Generate a unique key for the attachment in S3
-			// uniqueID := uuid.New().String()
-			// attachmentKey := fmt.Sprintf("attachments/%s/%s_%s", emailUser, uniqueID, att.Filename)
-
-			// // Upload the attachment to S3
-			// attachmentURL, err := pkg.UploadAttachment(decodedContent, attachmentKey, att.ContentType)
-			// if err != nil {
-			// 	fmt.Printf("Failed to upload attachment %s: %v\n", att.Filename, err)
-			// 	return c.JSON(http.StatusInternalServerError, map[string]string{
-			// 		"error": fmt.Sprintf("Failed to upload attachment %s", att.Filename),
-			// 	})
-			// }
-
 			// Convert filename to lowercase and replace spaces with underscores
 			filename := strings.ToLower(att.Filename)
 			filename = strings.ReplaceAll(filename, " ", "_")
@@ -173,11 +160,18 @@ func SendEmailHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
+
+	var preview string
+	length := 25
+	if len(req.Body) > length {
+		preview = req.Body[:length]
+	}
 	// fmt.Println("attachmentsJSON", attachmentsJSON)
 	_, err = tx.Exec(`
         INSERT INTO emails (
             user_id,
             email_type,
+			preview,
             sender_email,
             sender_name,
             subject,
@@ -189,8 +183,8 @@ func SendEmailHandler(c echo.Context) error {
 			created_by,
 			updated_by
         ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, emailUser, "", req.Subject, req.Body, attachmentsJSON, userID, userID)
+        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
+		userID, emailUser, preview, req.Subject, req.Body, attachmentsJSON, userID, userID)
 	if err != nil {
 		fmt.Println("Failed to save email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
