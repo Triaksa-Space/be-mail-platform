@@ -142,7 +142,7 @@ func SendEmailHandler(c echo.Context) error {
 	}
 
 	// Send email via pkg/aws
-	err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
+	err = pkg.SendEmailSMTP(req.To, emailUser, req.Subject, req.Body, attachments)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -166,7 +166,7 @@ func SendEmailHandler(c echo.Context) error {
 	if len(req.Body) > length {
 		preview = req.Body[:length]
 	}
-	// fmt.Println("attachmentsJSON", attachmentsJSON)
+	originalUsername := strings.Split(emailUser, "@")[0]
 	_, err = tx.Exec(`
         INSERT INTO emails (
             user_id,
@@ -184,7 +184,7 @@ func SendEmailHandler(c echo.Context) error {
 			updated_by
         ) 
         VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, emailUser, preview, req.Subject, req.Body, attachmentsJSON, userID, userID)
+		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
 	if err != nil {
 		fmt.Println("Email sent but Failed to save into DB email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
@@ -17,6 +18,7 @@ func RoleMiddleware(requiredRoleID int) echo.MiddlewareFunc {
 			var roleID int
 			err := config.DB.Get(&roleID, "SELECT role_id FROM users WHERE id = ?", userID)
 			if err != nil || roleID != requiredRoleID {
+				fmt.Println("Failed to fetch user's role ID:", err)
 				return c.JSON(http.StatusForbidden, map[string]string{"error": "Access denied"})
 			}
 
