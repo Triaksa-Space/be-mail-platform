@@ -1,12 +1,11 @@
 module github.com/Triaksa-Space/be-mail-platform
 
-go 1.23.2
+go 1.23
 
 require (
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/golang-jwt/jwt/v5 v5.0.0
-	github.com/google/uuid v1.4.0
 	github.com/jhillyerd/enmime v1.3.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/labstack/echo/v4 v4.12.0
