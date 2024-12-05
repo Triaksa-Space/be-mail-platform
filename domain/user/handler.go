@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -182,16 +183,6 @@ func BulkCreateUserHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
 
-	// var emailUser string
-	// err := config.DB.Get(&emailUser, `
-	//     SELECT email
-	//     FROM users
-	//     WHERE id = ? LIMIT 1`, userID)
-	// if err != nil {
-	// 	fmt.Println("Failed to fetch user email", err)
-	// 	return err
-	// }
-
 	req := new(BulkCreateUserRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -247,9 +238,23 @@ func BulkCreateUserHandler(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		// If username exists, append a number to make it unique
+		// Initialize counter
 		counter := 1
 		originalUsername := strings.Split(username, "@")[0]
+
+		// Extract trailing digits from the original username
+		re := regexp.MustCompile(`^(.*?)(\d+)$`)
+		matches := re.FindStringSubmatch(originalUsername)
+		if len(matches) == 3 {
+			namePart := matches[1]
+			numberPart := matches[2]
+			counter, _ = strconv.Atoi(numberPart)
+			counter++ // Start from the next number
+			originalUsername = namePart
+		}
+
+		// Loop to find an available username
+		exists = true
 		for exists {
 			username = fmt.Sprintf("%s%d@%s", originalUsername, counter, req.Domain)
 			err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
@@ -303,27 +308,25 @@ func BulkCreateUserHandler(c echo.Context) error {
 	// Generate the email body with enhanced styling
 	var emailBody strings.Builder
 	emailBody.WriteString(`
-        <table style="width: 100%; border-collapse: collapse;">
-            <tr style="background-color: #f2f2f2;">
-                <th style="border: 1px solid #ddd; padding: 8px;">No</th>
-                <th style="border: 1px solid #ddd; padding: 8px;">Email</th>
-                <th style="border: 1px solid #ddd; padding: 8px;">Password</th>
-            </tr>
-    `)
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr style="background-color: #f2f2f2;">
+            <th style="border: 1px solid #ddd; padding: 8px; width: 50px; text-align: center;">No</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Email</th>
+            <th style="border: 1px solid #ddd; padding: 8px;">Password</th>
+        </tr>
+`)
 
 	for i, user := range createdUsers {
 		emailBody.WriteString(fmt.Sprintf(`
-            <tr>
-                <td style="border: 1px solid #ddd; padding: 8px;">%d</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
-            </tr>
-        `, i+1, user["Email"], user["Password"]))
+        <tr>
+            <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">%d</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
+        </tr>
+    `, i+1, user["Email"], user["Password"]))
 	}
 
 	emailBody.WriteString("</table>")
-
-	fmt.Println("Email body:", emailBody.String())
 
 	emailUser := viper.GetString("EMAIL_SUPPORT")
 	// Send email via pkg/aws

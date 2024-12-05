@@ -48,6 +48,12 @@ jobs:
         echo "AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY }}" >> .env
         echo "S3_BUCKET_NAME=${{ secrets.S3_BUCKET_NAME }}" >> .env
         echo "S3_PREFIX=${{ secrets.S3_PREFIX }}" >> .env
+        echo "IAM_USERNAME=${{IAM_USERNAME}}" >> .env
+        echo "SMTP_HOST=${{SMTP_HOST}}" >> .env
+        echo "SMTP_PORT=${{SMTP_PORT}}" >> .env
+        echo "SMTP_USERNAME=${{SMTP_USERNAME}}" >> .env
+        echo "SMTP_PASSWORD=${{SMTP_PASSWORD}}" >> .env
+        echo "EMAIL_SUPPORT=${{EMAIL_SUPPORT}}" >> .env
         
         echo "✅ Environment file created"
 
