@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
+	"github.com/spf13/viper"
 
 	"github.com/labstack/echo/v4"
 	"golang.org/x/exp/rand"
@@ -180,15 +182,15 @@ func BulkCreateUserHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
 
-	var emailUser string
-	err := config.DB.Get(&emailUser, `
-        SELECT email 
-        FROM users 
-        WHERE id = ? LIMIT 1`, userID)
-	if err != nil {
-		fmt.Println("Failed to fetch user email", err)
-		return err
-	}
+	// var emailUser string
+	// err := config.DB.Get(&emailUser, `
+	//     SELECT email
+	//     FROM users
+	//     WHERE id = ? LIMIT 1`, userID)
+	// if err != nil {
+	// 	fmt.Println("Failed to fetch user email", err)
+	// 	return err
+	// }
 
 	req := new(BulkCreateUserRequest)
 	if err := c.Bind(req); err != nil {
@@ -321,14 +323,17 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 	emailBody.WriteString("</table>")
 
-	// // Send email via pkg/aws
-	// err = pkg.SendEmail(req.SendTo, emailUser, "Mailsaja Create Bulk User", emailBody.String(), nil)
-	// if err != nil {
-	// 	fmt.Println("Failed to send email", err)
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{
-	// 		"error": "Failed to send email",
-	// 	})
-	// }
+	fmt.Println("Email body:", emailBody.String())
+
+	emailUser := viper.GetString("EMAIL_SUPPORT")
+	// Send email via pkg/aws
+	err := pkg.SendEmail(req.SendTo, emailUser, "Mailsaja Create Bulk User", emailBody.String(), nil)
+	if err != nil {
+		fmt.Println("Failed to send email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to send email",
+		})
+	}
 
 	// Return the response
 	return c.JSON(http.StatusCreated, map[string]interface{}{
