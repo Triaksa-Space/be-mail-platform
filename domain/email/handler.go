@@ -142,7 +142,7 @@ func SendEmailHandler(c echo.Context) error {
 	}
 
 	// Send email via pkg/aws
-	err = pkg.SendEmailSMTP(req.To, emailUser, req.Subject, req.Body, attachments)
+	err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -1139,18 +1139,27 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 	}
 
 	// Delete the oldest email if the user has 10 emails
-	if emailCount >= 10 {
+	if emailCount > 10 {
 		fmt.Println("Deleting oldest email for user", userID)
-		_, err = config.DB.Exec(`
-			DELETE FROM emails 
-			WHERE id = (
-				SELECT id 
-				FROM emails 
-				WHERE user_id = ? 
-				ORDER BY created_at ASC 
-				LIMIT 1
-			)
+		// Select the ID of the oldest email for the user
+		var oldestEmailID int64
+		err = config.DB.Get(&oldestEmailID, `
+			SELECT id 
+			FROM emails 
+			WHERE user_id = ? 
+			ORDER BY created_at ASC 
+			LIMIT 1
 		`, userID)
+		if err != nil {
+			fmt.Printf("Failed to select oldest email for user %d: %v\n", userID, err)
+			return err
+		}
+
+		// Delete the oldest email
+		_, err = config.DB.Exec(`
+		DELETE FROM emails 
+		WHERE id = ?
+		`, oldestEmailID)
 		if err != nil {
 			fmt.Printf("Failed to delete oldest email for user %d: %v\n", userID, err)
 			return err
