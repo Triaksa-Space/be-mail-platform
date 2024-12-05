@@ -36,7 +36,7 @@ func LoginHandler(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
 	}
 
-	token, err := utils.GenerateJWT(user.ID, user.Email)
+	token, err := utils.GenerateJWT(user.ID, user.Email, user.RoleID)
 	if err != nil {
 		fmt.Println("GenerateJWT", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
