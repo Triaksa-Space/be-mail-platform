@@ -211,6 +211,7 @@ func SendEmailHandler(c echo.Context) error {
 
 func GetFileEmailToDownloadHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
+	roleID := c.Get("role_id").(int)
 	// Get email ID and file URL from the request parameters
 	// emailID := c.Param("id")
 	// fileURL := c.Param("file_url")
@@ -231,7 +232,11 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
 
 	// Fetch the email record from the database
 	var email Email
-	err := config.DB.Get(&email, `SELECT id, 
+	var query string
+	var err error
+
+	if roleID == 1 {
+		query = `SELECT id, 
             user_id, 
             sender_email, sender_name, 
             subject, 
@@ -241,7 +246,25 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
 			attachments,
             timestamp, 
             created_at, 
-            updated_at  FROM emails WHERE id = ? and user_id = ?`, emailID, userID)
+            updated_at  FROM emails WHERE id = ? and user_id = ?`
+
+		err = config.DB.Get(&email, query, emailID, userID)
+	} else {
+		query = `SELECT id, 
+			user_id, 
+			sender_email, sender_name, 
+			subject, 
+			body,
+			preview,
+			message_id,
+			attachments,
+			timestamp, 
+			created_at, 
+			updated_at  FROM emails WHERE id = ?`
+
+		err = config.DB.Get(&email, query, emailID)
+	}
+
 	if err != nil {
 		fmt.Println("Failed to fetch email", err)
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
