@@ -212,8 +212,22 @@ func SendEmailHandler(c echo.Context) error {
 func GetFileEmailToDownloadHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 	// Get email ID and file URL from the request parameters
-	emailID := c.Param("id")
-	fileURL := c.Param("file_url")
+	// emailID := c.Param("id")
+	// fileURL := c.Param("file_url")
+	// Define a struct to parse the JSON payload
+	type RequestPayload struct {
+		EmailID string `json:"email_id"`
+		FileURL string `json:"file_url"`
+	}
+
+	// Parse the JSON payload
+	var payload RequestPayload
+	if err := c.Bind(&payload); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+	}
+
+	emailID := payload.EmailID
+	fileURL := payload.FileURL
 
 	// Fetch the email record from the database
 	var email Email
