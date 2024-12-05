@@ -52,7 +52,7 @@ func JWTMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// Set user claims in the context for downstream handlers
 		c.Set("user_id", int64(claims["user_id"].(float64))) // Assuming `user_id` is an integer claim
 		c.Set("email", claims["email"].(string))
-		c.Set("role_id", claims["role_id"].(int))
+		c.Set("role_id", int64(claims["role_id"].(float64)))
 
 		return next(c)
 	}

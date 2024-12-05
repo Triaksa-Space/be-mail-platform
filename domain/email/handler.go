@@ -211,7 +211,7 @@ func SendEmailHandler(c echo.Context) error {
 
 func GetFileEmailToDownloadHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
-	roleID := c.Get("role_id").(int)
+	roleID := c.Get("role_id").(int64)
 	// Get email ID and file URL from the request parameters
 	// emailID := c.Param("id")
 	// fileURL := c.Param("file_url")
