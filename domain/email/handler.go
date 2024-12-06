@@ -817,7 +817,6 @@ func SyncEmails() error {
 			}
 			fmt.Println("messageID", messageID)
 
-			fmt.Println("start GetObject", time.Now())
 			// Get the email object
 			output, err := s3Client.GetObject(&s3.GetObjectInput{
 				Bucket: aws.String(bucketName),
@@ -828,23 +827,22 @@ func SyncEmails() error {
 				continue
 			}
 			defer output.Body.Close()
-			fmt.Println("finish GetObject", time.Now())
 
-			fmt.Println("start ReadFrom", time.Now())
 			// Read the email content
 			buf := new(bytes.Buffer)
 			buf.ReadFrom(output.Body)
 			emailContent := buf.Bytes()
-			fmt.Println("finish ReadFrom", time.Now())
 
-			fmt.Println("start storeRawEmail", time.Now())
+			if emailContent == nil {
+				fmt.Println("emailContent is empty")
+				continue
+			}
 			// Store the raw email in the database
 			err = storeRawEmail(messageID, emailContent)
 			if err != nil {
 				fmt.Printf("Failed to store raw email %s: %v\n", messageID, err)
 				continue
 			}
-			fmt.Println("start storeRawEmail", time.Now())
 
 			// Delete the email object from S3 after storing
 			_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
@@ -1103,8 +1101,9 @@ func parseAddresses(addresses string) []EmailAddress {
 
 func generatePreview(plainText string, htmlBody string) string {
 	var text string
+	// fmt.Println("plainText", plainText)
 	if plainText != "" {
-		text = plainText
+		text = html2text(plainText)
 	} else {
 		// Convert HTML to plain text
 		text = html2text(htmlBody)
@@ -1118,8 +1117,6 @@ func generatePreview(plainText string, htmlBody string) string {
 
 // // Simple HTML to text converter (you might want to use a proper library)
 func html2text(contentHTML string) string {
-	// This is a very basic implementation
-	// Consider using a proper HTML to text library
 	text := contentHTML
 	text = strings.ReplaceAll(text, "<br>", "\n")
 	text = strings.ReplaceAll(text, "<br/>", "\n")
@@ -1133,6 +1130,13 @@ func html2text(contentHTML string) string {
 
 	// Decode HTML entities
 	text = html.UnescapeString(text)
+
+	// Remove zero-width spaces
+	text = strings.ReplaceAll(text, "\u200B", "")
+	text = strings.ReplaceAll(text, "\u200C", "")
+	text = strings.ReplaceAll(text, "\u200D", "")
+	text = strings.ReplaceAll(text, "\xE2\x80", "")
+	text = strings.ReplaceAll(text, "\xE2", "")
 
 	// Remove non-printable characters
 	text = removeNonPrintable(text)
