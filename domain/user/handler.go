@@ -161,9 +161,9 @@ func CreateUserAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	userName, err := getUserAdminByID(userID)
+	userName, err := getUserSuperAdminByID(userID)
 	if err != nil {
-		fmt.Println("error getUserAdminByID", err)
+		fmt.Println("error getUserSuperAdminByID", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
@@ -236,8 +236,8 @@ func CreateUserHandler(c echo.Context) error {
 
 	// Insert into table generated_email
 	_, err = config.DB.Exec(
-		"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, NOW(), NOW(), ?, ?, ?, ?)",
-		req.Email, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
+		"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by) VALUES (?, NOW(), NOW(), ?, ?)",
+		req.Email, userID, userID, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -562,7 +562,7 @@ func ListAdminUsersHandler(c echo.Context) error {
 	searchUsername := c.QueryParam("email")
 	// Fetch paginated users
 	var users []User
-	query := "SELECT * FROM users WHERE role_id = 0 "
+	query := "SELECT * FROM users WHERE role_id = 2 "
 	if searchUsername != "" {
 		query = query + " AND email LIKE '%" + searchUsername + "%' "
 	}
@@ -642,12 +642,32 @@ func updateLastLogin(userID int64) error {
 	return nil
 }
 
-func getUserAdminByID(userID int64) (string, error) {
+func getUserSuperAdminByID(userID int64) (string, error) {
 	var user string
 	query := `
         SELECT email
         FROM users
         WHERE id = ? AND role_id = 0
+    `
+
+	// Execute the query
+	err := config.DB.Get(&user, query, userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", err
+		}
+		return "", err
+	}
+
+	return user, nil
+}
+
+func getUserAdminByID(userID int64) (string, error) {
+	var user string
+	query := `
+        SELECT email
+        FROM users
+        WHERE id = ? AND role_id = 2 OR role_id = 0
     `
 
 	// Execute the query

@@ -372,6 +372,12 @@ func GetEmailHandler(c echo.Context) error {
 		fmt.Println("error updateLastLogin", err)
 	}
 
+	// Update isRead
+	err = updateIsRead(emailID)
+	if err != nil {
+		fmt.Println("error updateIsRead", err)
+	}
+
 	return c.JSON(http.StatusOK, emailResp)
 }
 
@@ -1194,6 +1200,18 @@ func updateLimitSentEmails(userID int64) error {
         SET sent_emails = sent_emails + 1,
 		last_login = NOW()
         WHERE id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func updateIsRead(emailID string) error {
+	_, err := config.DB.Exec(`
+		UPDATE emails 
+		SET is_read = TRUE
+		WHERE id = ?`, emailID)
 	if err != nil {
 		return err
 	}
