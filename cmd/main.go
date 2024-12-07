@@ -58,7 +58,7 @@ func runSync() {
 
 	// Start the periodic task in a separate goroutine
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
 
 		for {
