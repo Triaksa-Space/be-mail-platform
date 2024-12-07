@@ -50,6 +50,20 @@ func CheckEmailLimit(userID int64) error {
 		return err
 	}
 
+	if user.SentEmails >= 3 {
+		return errors.New("daily email limit exceeded (3 emails per 24 hours)")
+	}
+
+	if user.SentEmails == 0 {
+		// first time sent email
+		_, err := config.DB.Exec(`
+            UPDATE users 
+            SET sent_emails = 0, 
+                last_email_time = NOW() 
+            WHERE id = ?`, userID)
+		return err
+	}
+
 	// Reset counter if 24h passed
 	if time.Since(*user.LastEmailTime) > 24*time.Hour {
 		_, err := config.DB.Exec(`
@@ -60,16 +74,6 @@ func CheckEmailLimit(userID int64) error {
 		return err
 	}
 
-	if user.SentEmails >= 3 {
-		return errors.New("daily email limit exceeded (3 emails per 24 hours)")
-	}
-
-	// Increment counter
-	_, err = config.DB.Exec(`
-        UPDATE users 
-        SET sent_emails = sent_emails + 1,
-		last_login = NOW()
-        WHERE id = ?`, userID)
 	return err
 }
 
@@ -202,6 +206,12 @@ func SendEmailHandler(c echo.Context) error {
 	err = updateLastLogin(userID)
 	if err != nil {
 		fmt.Println("error updateLastLogin", err)
+	}
+
+	// Update limit if sent Email success
+	err = updateLimitSentEmails(userID)
+	if err != nil {
+		fmt.Println("error updateLimitSentEmails", err)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
@@ -1175,6 +1185,20 @@ func removeNonPrintable(s string) string {
 		}
 	}
 	return buf.String()
+}
+
+func updateLimitSentEmails(userID int64) error {
+	// Increment counter
+	_, err := config.DB.Exec(`
+        UPDATE users 
+        SET sent_emails = sent_emails + 1,
+		last_login = NOW()
+        WHERE id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func updateLastLogin(userID int64) error {
