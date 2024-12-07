@@ -71,6 +71,20 @@ func CreateBucketFolderEmailUser(s3Client *s3.S3, reqEmail string) error {
 	return nil
 }
 
+func DeleteS3ByMessageID(s3Client *s3.S3, bucketName, messageID string) error {
+	// Delete the email object from S3 after storing
+	_, err := s3Client.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(messageID),
+	})
+	if err != nil {
+		fmt.Printf("Failed to delete object %s: %v\n", messageID, err)
+		return err
+	}
+
+	return err
+}
+
 func DeleteS3FolderContents(s3Client *s3.S3, bucket, prefix string) error {
 	// List all objects with the prefix
 	listInput := &s3.ListObjectsV2Input{

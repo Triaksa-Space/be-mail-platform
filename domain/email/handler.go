@@ -838,7 +838,7 @@ func SyncEmails() error {
 				continue
 			}
 			// Store the raw email in the database
-			err = storeRawEmail(messageID, emailContent)
+			err = storeRawEmail(s3Client, messageID, emailContent)
 			if err != nil {
 				fmt.Printf("Failed to store raw email %s: %v\n", messageID, err)
 				continue
@@ -865,7 +865,7 @@ func SyncEmails() error {
 	return nil
 }
 
-func storeRawEmail(messageID string, emailContent []byte) error {
+func storeRawEmail(s3Client *s3.S3, messageID string, emailContent []byte) error {
 	// Extract recipient email to associate with user
 	// fmt.Println("start extract", time.Now())
 	sendEmailTo, dateEmail, err := extractRecipientEmail(emailContent)
@@ -875,6 +875,26 @@ func storeRawEmail(messageID string, emailContent []byte) error {
 	// fmt.Println("finish extract", time.Now())
 	fmt.Println("sendEmailTo", sendEmailTo)
 	fmt.Println("dateEmail", dateEmail)
+
+	// if sendEmailTo not found delete
+	// Get the user ID from the email address
+	var userID int64
+	err = config.DB.Get(&userID, `
+		SELECT id 
+		FROM users 
+		WHERE email = ?`, sendEmailTo)
+	fmt.Println("userID storeRawEmail", userID)
+	if err != nil {
+		fmt.Printf("Failed to get user ID for email %s: %v\n", sendEmailTo, err)
+		fmt.Println("User not registered in our Database")
+		bucketName := viper.GetString("S3_BUCKET_NAME")
+		// Delete the email object from S3 after storing
+		err := pkg.DeleteS3ByMessageID(s3Client, bucketName, messageID)
+		if err != nil {
+			fmt.Printf("Failed to delete object %s: %v\n", messageID, err)
+			return err
+		}
+	}
 
 	fmt.Println("start insert", time.Now())
 	// Insert raw email into the raw_emails table
