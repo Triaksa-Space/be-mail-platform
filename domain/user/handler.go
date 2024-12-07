@@ -231,37 +231,40 @@ func BulkCreateUserHandler(c echo.Context) error {
 			}
 		}
 
-		// Check if username exists
+		// Check if the base username exists
 		var exists bool
 		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
-		// Initialize counter
-		counter := 1
-		originalUsername := strings.Split(username, "@")[0]
+		// If the base username exists, find an available username with a number
+		if exists {
+			// Initialize counter
+			counter := 1
+			originalUsername := strings.Split(username, "@")[0]
 
-		// Extract trailing digits from the original username
-		re := regexp.MustCompile(`^(.*?)(\d+)$`)
-		matches := re.FindStringSubmatch(originalUsername)
-		if len(matches) == 3 {
-			namePart := matches[1]
-			numberPart := matches[2]
-			counter, _ = strconv.Atoi(numberPart)
-			counter++ // Start from the next number
-			originalUsername = namePart
-		}
-
-		// Loop to find an available username
-		exists = true
-		for exists {
-			username = fmt.Sprintf("%s%d@%s", originalUsername, counter, req.Domain)
-			err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
-			if err != nil {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			// Extract trailing digits from the original username
+			re := regexp.MustCompile(`^(.*?)(\d+)$`)
+			matches := re.FindStringSubmatch(originalUsername)
+			if len(matches) == 3 {
+				namePart := matches[1]
+				numberPart := matches[2]
+				counter, _ = strconv.Atoi(numberPart)
+				counter++ // Start from the next number
+				originalUsername = namePart
 			}
-			counter++
+
+			// Loop to find an available username
+			exists = true
+			for exists {
+				username = fmt.Sprintf("%s%d@%s", originalUsername, counter, req.Domain)
+				err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
+				if err != nil {
+					return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				}
+				counter++
+			}
 		}
 
 		// Start transaction for this user
