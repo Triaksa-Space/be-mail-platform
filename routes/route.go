@@ -16,7 +16,7 @@ func RegisterRoutes(e *echo.Echo) {
 	rateLimiterConfig := middleware.RateLimiterConfig{
 		MaxRequests:   5,                // e.g., 5 login attempts
 		Window:        10 * time.Minute, // per 10 minutes
-		BlockDuration: 15 * time.Minute, // block for 10 minutes
+		BlockDuration: 10 * time.Minute, // block for 10 minutes
 		DB:            config.DB.DB,
 	}
 

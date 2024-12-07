@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -44,9 +45,10 @@ func RateLimiterMiddleware(config RateLimiterConfig) echo.MiddlewareFunc {
 
 			// Check if IP is currently blocked
 			if blockedUntil.Valid && blockedUntil.Time.After(now) {
+				remaining := blockedUntil.Time.Sub(now)
 				tx.Commit()
 				return c.JSON(http.StatusTooManyRequests, map[string]string{
-					"error": "Too many requests from this IP, please try again later.",
+					"error": fmt.Sprintf("Too many requests from this IP, please try again in %d minutes and %d seconds.", int(remaining.Minutes()), int(remaining.Seconds())%60),
 				})
 			}
 
@@ -104,7 +106,7 @@ func RateLimiterMiddleware(config RateLimiterConfig) echo.MiddlewareFunc {
 						}
 						tx.Commit()
 						return c.JSON(http.StatusTooManyRequests, map[string]string{
-							"error": "Too many requests from this IP, please try again later.",
+							"error": fmt.Sprintf("Too many requests from this IP, please try again in %d minutes and %d seconds.", int(config.BlockDuration.Minutes()), int(config.BlockDuration.Seconds())%60),
 						})
 					}
 
