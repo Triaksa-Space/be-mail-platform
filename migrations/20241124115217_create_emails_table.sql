@@ -2,6 +2,7 @@
 -- +goose StatementBegin
 CREATE TABLE emails (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
     user_id BIGINT NOT NULL,
     sender_email VARCHAR(255) NOT NULL,
     sender_name VARCHAR(255) NOT NULL,

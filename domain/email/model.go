@@ -4,6 +4,7 @@ import "time"
 
 type Email struct {
 	ID          int64     `db:"id"`
+	IsRead      bool      `db:"is_read"`
 	UserID      int64     `db:"user_id"`
 	SenderEmail string    `db:"sender_email"`
 	SenderName  string    `db:"sender_name"`

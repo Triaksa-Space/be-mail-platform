@@ -369,6 +369,7 @@ func ListEmailsHandler(c echo.Context) error {
 	// Fetch all emails
 	var emails []Email
 	err := config.DB.Select(&emails, `SELECT id, 
+			is_read,
             user_id, 
             sender_email, sender_name, 
             subject,
@@ -417,6 +418,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 	var emails []Email
 	err = config.DB.Select(&emails, `SELECT id, 
+			is_read,
             user_id, 
             sender_email, sender_name, 
             subject, 
@@ -471,6 +473,7 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 	var emails []Email
 	err = config.DB.Select(&emails, `SELECT id, 
+			is_read,
             user_id, 
             sender_email, 
 			sender_name, 
