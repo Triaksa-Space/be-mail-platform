@@ -180,7 +180,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 	// Insert the user into the database
 	_, err = config.DB.Exec(
 		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
-		req.Username, hashedPassword, 0, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
+		req.Username, hashedPassword, 2, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
 		fmt.Println("ERROR", err)
