@@ -57,6 +57,55 @@ func LogoutHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "Logout successful"})
 }
 
+func ChangePasswordAdminHandler(c echo.Context) error {
+	// Extract user ID from JWT (set by JWT middleware)
+	superAdminID := c.Get("user_id").(int64)
+
+	// Bind request body
+	req := new(AdminChangePasswordRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
+	// Fetch user data from the database
+	var hashedPassword string
+	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
+	if err != nil {
+		fmt.Println("error fetch user data", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// // Check if the old password is correct
+	// if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
+	// 	return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
+	// }
+
+	// // Check if the new password is the same as the old password
+	// if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
+	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
+	// }
+
+	// Hash the new password
+	newHashedPassword, err := utils.HashPassword(req.NewPassword)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// Update the user's password in the database
+	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, req.UserID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// Update last login
+	err = updateLastLogin(superAdminID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
+}
+
 func ChangePasswordHandler(c echo.Context) error {
 	// Extract user ID from JWT (set by JWT middleware)
 	userID := c.Get("user_id").(int64)
@@ -375,13 +424,55 @@ func BulkCreateUserHandler(c echo.Context) error {
 	})
 }
 
-// ONLY ADMIN CAN DELETE USER
+func DeleteUserAdminHandler(c echo.Context) error {
+	userID := c.Param("id")
+
+	// Get user email before deletion for S3
+	var userEmail string
+	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ? and role_id=2", userID) // 2 is admin 1 is userEmail 0 is superAdmin
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	// Start transaction
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+	}
+	defer tx.Rollback()
+
+	// Delete emails
+	_, err = tx.Exec("DELETE FROM emails WHERE user_id = ?", userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete emails"})
+	}
+
+	// Delete user
+	result, err := tx.Exec("DELETE FROM users WHERE id = ?", userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully"})
+}
+
+// ONLY ADMIN CAN DELETE USER EMAIL
 func DeleteUserHandler(c echo.Context) error {
 	userID := c.Param("id")
 
 	// Get user email before deletion for S3
 	var userEmail string
-	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ?", userID)
+	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ? and role_id=1", userID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 	}
