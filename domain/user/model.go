@@ -12,6 +12,8 @@ type User struct {
 	LastEmailTime *time.Time `db:"last_email_time"`
 	CreatedBy     int64      `db:"created_by"`
 	UpdatedBy     *int       `db:"updated_by"`
+	CreatedByName string     `db:"created_by_name"`
+	UpdatedByName string     `db:"updated_by_name"`
 	CreatedAt     time.Time  `db:"created_at"`
 	UpdatedAt     time.Time  `db:"updated_at"`
 }

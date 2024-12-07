@@ -1,6 +1,7 @@
 package user
 
 import (
+	"database/sql"
 	"encoding/csv"
 	"fmt"
 	"net/http"
@@ -106,6 +107,12 @@ func CreateUserAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
+	userName, err := getUserAdminByID(userID)
+	if err != nil {
+		fmt.Println("error getUserAdminByID", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
 	// if err := c.Validate(req); err != nil {
 	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	// }
@@ -118,8 +125,8 @@ func CreateUserAdminHandler(c echo.Context) error {
 
 	// Insert the user into the database
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, NOW(), NOW(), ?, ?)",
-		req.Username, hashedPassword, 0, userID, userID, // Hardcoded role ID for now
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
+		req.Username, hashedPassword, 0, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
 		fmt.Println("ERROR", err)
@@ -147,6 +154,12 @@ func CreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
+	userName, err := getUserAdminByID(userID)
+	if err != nil {
+		fmt.Println("error getUserAdminByID", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
 	// if err := c.Validate(req); err != nil {
 	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	// }
@@ -159,8 +172,8 @@ func CreateUserHandler(c echo.Context) error {
 
 	// Insert the user into the database
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, NOW(), NOW(), ?, ?)",
-		req.Email, hashedPassword, 1, userID, userID, // Hardcoded role ID for now
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
+		req.Email, hashedPassword, 1, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
 		fmt.Println("ERROR", err)
@@ -169,8 +182,8 @@ func CreateUserHandler(c echo.Context) error {
 
 	// Insert into table generated_email
 	_, err = config.DB.Exec(
-		"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by) VALUES (?, NOW(), NOW(), ?, ?)",
-		req.Email, userID, userID, // Hardcoded role ID for now
+		"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, NOW(), NOW(), ?, ?, ?, ?)",
+		req.Email, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -182,6 +195,12 @@ func CreateUserHandler(c echo.Context) error {
 func BulkCreateUserHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
+
+	userName, err := getUserAdminByID(userID)
+	if err != nil {
+		fmt.Println("error getUserAdminByID", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
 	req := new(BulkCreateUserRequest)
 	if err := c.Bind(req); err != nil {
@@ -281,8 +300,8 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 		// Insert user
 		_, err = tx.Exec(
-			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by) VALUES (?, ?, 1, NOW(), NOW(), ?, ?)",
-			username, hashedPassword, userID, userID,
+			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), ?, ?, ?, ?)",
+			username, hashedPassword, userID, userID, userName, userName,
 		)
 		if err != nil {
 			fmt.Println("Failed to insert user", err)
@@ -291,8 +310,8 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 		// Insert generated email
 		_, err = tx.Exec(
-			"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by) VALUES (?, NOW(), NOW(), ?, ?)",
-			username, userID, userID,
+			"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, NOW(), NOW(), ?, ?, ?, ?)",
+			username, userID, userID, userName, userName,
 		)
 		if err != nil {
 			fmt.Println("Failed to insert generated email", err)
@@ -333,7 +352,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 	emailUser := viper.GetString("EMAIL_SUPPORT")
 	// Send email via pkg/aws
-	err := pkg.SendEmail(req.SendTo, emailUser, "Mailsaja Create Bulk User", emailBody.String(), nil)
+	err = pkg.SendEmail(req.SendTo, emailUser, "Mailsaja Create Bulk User", emailBody.String(), nil)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -525,4 +544,24 @@ func updateLastLogin(userID int64) error {
 	}
 
 	return nil
+}
+
+func getUserAdminByID(userID int64) (string, error) {
+	var user string
+	query := `
+        SELECT email
+        FROM users
+        WHERE id = ? AND role_id = 0
+    `
+
+	// Execute the query
+	err := config.DB.Get(&user, query, userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", err
+		}
+		return "", err
+	}
+
+	return user, nil
 }
