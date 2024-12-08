@@ -370,8 +370,8 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 		// Insert generated email
 		_, err = tx.Exec(
-			"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, NOW(), NOW(), ?, ?, ?, ?)",
-			username, userID, userID, userName, userName,
+			"INSERT INTO generated_emails (username, created_at, updated_at, created_by, updated_by) VALUES (?, NOW(), NOW(), ?, ?, ?, ?)",
+			username, userID, userID,
 		)
 		if err != nil {
 			fmt.Println("Failed to insert generated email", err)
