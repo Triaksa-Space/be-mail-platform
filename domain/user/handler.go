@@ -118,7 +118,7 @@ func ChangePasswordHandler(c echo.Context) error {
 
 	// Fetch user data from the database
 	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", userID)
+	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ? and (role_id = 1 or role_id =2)", userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}

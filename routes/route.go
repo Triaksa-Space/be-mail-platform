@@ -35,7 +35,7 @@ func RegisterRoutes(e *echo.Echo) {
 
 	userGroup := e.Group("/user")
 	userGroup.Use(middleware.JWTMiddleware)
-	userGroup.PUT("/change_password", user.ChangePasswordHandler, middleware.RoleMiddleware(admin))
+	userGroup.PUT("/change_password", user.ChangePasswordHandler)
 	userGroup.PUT("/change_password/admin", user.ChangePasswordAdminHandler, middleware.RoleMiddleware(superAdminOnly))
 	// `${process.env.NEXT_PUBLIC_API_BASE_URL}/user/${selectedAdmin.id}/change_password`,
 	userGroup.POST("/", user.CreateUserHandler, middleware.RoleMiddleware(admin))                    // Admin-only
