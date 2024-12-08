@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/textproto"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -149,6 +150,108 @@ func UploadAttachment(content []byte, key, contentType string) (string, error) {
 	)
 
 	return s3URL, nil
+}
+
+// UploadAttachment uploads a file to S3 and returns the pre-signed URL
+func UploadPreSignAttachment(content []byte, key string, contentType string) (string, error) {
+	// Create the folder/prefix in S3
+	bucketName := viper.GetString("S3_BUCKET_NAME") // "ses-mailsaja-received"
+
+	sess, err := InitAWS()
+	if err != nil {
+		return "", fmt.Errorf("failed to create AWS session: %v", err)
+	}
+
+	s3Client := s3.New(sess)
+
+	// Upload the file to S3
+	_, err = s3Client.PutObject(&s3.PutObjectInput{
+		Bucket:      aws.String(bucketName), // Replace with your S3 bucket name
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(content),
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload file to S3: %v", err)
+	}
+
+	// Generate a pre-signed URL for the uploaded file
+	req, _ := s3Client.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(bucketName), // Replace with your S3 bucket name
+		Key:    aws.String(key),
+	})
+	urlStr, err := req.Presign((24 * 3) * time.Hour) // URL valid for 3 days
+	if err != nil {
+		return "", fmt.Errorf("failed to generate pre-signed URL: %v", err)
+	}
+
+	return urlStr, nil
+}
+
+// SendEmailWithPresig sends an email with optional attachments using AWS SES
+func SendEmailWithPresig(toAddress, fromAddress, subject, htmlBody string, attachments []Attachment) error {
+	// Initialize AWS session
+	sess, err := InitAWS()
+	if err != nil {
+		return fmt.Errorf("failed to create AWS session: %v", err)
+	}
+
+	sesClient := ses.New(sess)
+
+	// Build the email body
+	var emailRaw bytes.Buffer
+	writer := multipart.NewWriter(&emailRaw)
+
+	// Write MIME headers
+	emailHeaders := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n",
+		fromAddress, toAddress, subject, writer.Boundary())
+	emailRaw.Write([]byte(emailHeaders))
+
+	// Upload attachments to S3 and include links in the email body
+	var attachmentLinks []string
+	for _, att := range attachments {
+		// Generate a unique key for the attachment
+		key := fmt.Sprintf("attachments/%s", att.Filename)
+
+		// Upload the attachment to S3
+		url, err := UploadPreSignAttachment(att.Content, key, att.ContentType)
+		if err != nil {
+			return fmt.Errorf("failed to upload attachment to S3: %v", err)
+		}
+
+		// Add the pre-signed URL to the list of attachment links
+		attachmentLinks = append(attachmentLinks, fmt.Sprintf("<a href=\"%s\">%s</a>", url, att.Filename))
+	}
+
+	// Append attachment links to the email body
+	if len(attachmentLinks) > 0 {
+		htmlBody += "<br><br>Attachments:<br>" + strings.Join(attachmentLinks, "<br>")
+	}
+
+	// Write the HTML body part
+	htmlPartHeaders := textproto.MIMEHeader{}
+	htmlPartHeaders.Set("Content-Type", "text/html; charset=UTF-8")
+	htmlPartHeaders.Set("Content-Transfer-Encoding", "base64")
+
+	htmlPart, _ := writer.CreatePart(htmlPartHeaders)
+	encodedBody := base64.StdEncoding.EncodeToString([]byte(htmlBody))
+	htmlPart.Write([]byte(encodedBody))
+
+	writer.Close()
+
+	// Send the email
+	input := &ses.SendRawEmailInput{
+		RawMessage: &ses.RawMessage{
+			Data: emailRaw.Bytes(),
+		},
+	}
+
+	_, err = sesClient.SendRawEmail(input)
+	if err != nil {
+		return fmt.Errorf("failed to send email: %v", err)
+	}
+
+	return nil
 }
 
 // SendEmail sends an email with optional attachments using AWS SES

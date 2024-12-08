@@ -2,7 +2,6 @@ package email
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,7 +76,7 @@ func CheckEmailLimit(userID int64) error {
 	return err
 }
 
-// handler.go
+// SendEmailHandler handles sending emails with attachments
 func SendEmailHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
@@ -96,61 +95,60 @@ func SendEmailHandler(c echo.Context) error {
 		})
 	}
 
-	// Parse and validate request
-	req := new(SendEmailRequest)
-	if err := c.Bind(req); err != nil {
-		fmt.Println("Failed to bind request", err)
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request payload",
-		})
-	}
+	// Parse form data
+	to := c.FormValue("to")
+	subject := c.FormValue("subject")
+	body := c.FormValue("body")
 
 	// Prepare attachments and upload to S3
 	var attachments []pkg.Attachment
 	var attachmentURLs []string
-	if len(req.Attachments) > 0 {
-		for _, att := range req.Attachments {
-			// Strip the data URL prefix if present
-			content := att.Content
-			contentStr := string(content)
-			if strings.HasPrefix(contentStr, "data:") {
-				parts := strings.SplitN(contentStr, ",", 2)
-				if len(parts) == 2 {
-					content = []byte(parts[1])
-				}
-			}
 
-			// Decode base64 content
-			decodedContent, err := base64.StdEncoding.DecodeString(base64.StdEncoding.EncodeToString(content))
-			if err != nil {
-				fmt.Printf("Failed to decode attachment %s: %v\n", att.Filename, err)
-				return c.JSON(http.StatusBadRequest, map[string]string{
-					"error": fmt.Sprintf("Invalid base64 content for attachment %s", att.Filename),
-				})
-			}
+	form, err := c.MultipartForm()
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid form data",
+		})
+	}
 
-			// Convert filename to lowercase and replace spaces with underscores
-			filename := strings.ToLower(att.Filename)
-			filename = strings.ReplaceAll(filename, " ", "_")
-
-			// // Append the attachment URL to the list
-			attachmentURLs = append(attachmentURLs, filename)
-
-			// // Prepare the attachment for sending email
-			attachments = append(attachments, pkg.Attachment{
-				Filename:    filename,
-				ContentType: att.ContentType,
-				Content:     decodedContent,
+	files := form.File["attachments"]
+	for _, file := range files {
+		src, err := file.Open()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to open attachment",
 			})
 		}
+		defer src.Close()
+
+		content, err := io.ReadAll(src)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to read attachment",
+			})
+		}
+
+		// Convert filename to lowercase and replace spaces with underscores
+		filename := strings.ToLower(file.Filename)
+		filename = strings.ReplaceAll(filename, " ", "_")
+
+		// Append the attachment URL to the list
+		attachmentURLs = append(attachmentURLs, filename)
+
+		// Prepare the attachment for sending email
+		attachments = append(attachments, pkg.Attachment{
+			Filename:    filename,
+			ContentType: file.Header.Get("Content-Type"),
+			Content:     content,
+		})
 	}
 
 	// Send email via pkg/aws
-	err = pkg.SendEmail(req.To, emailUser, req.Subject, req.Body, attachments)
+	err = pkg.SendEmail(to, emailUser, subject, body, attachments)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to send email",
+			"error": err.Error(),
 		})
 	}
 
@@ -167,15 +165,15 @@ func SendEmailHandler(c echo.Context) error {
 
 	var preview string
 	length := 25
-	if len(req.Body) > length {
-		preview = req.Body[:length]
+	if len(body) > length {
+		preview = body[:length]
 	}
 	originalUsername := strings.Split(emailUser, "@")[0]
 	_, err = tx.Exec(`
         INSERT INTO emails (
             user_id,
             email_type,
-			preview,
+            preview,
             sender_email,
             sender_name,
             subject,
@@ -184,11 +182,11 @@ func SendEmailHandler(c echo.Context) error {
             timestamp,
             created_at,
             updated_at,
-			created_by,
-			updated_by
+            created_by,
+            updated_by
         ) 
         VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
+		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
 	if err != nil {
 		fmt.Println("Email sent but Failed to save into DB email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
