@@ -281,14 +281,23 @@ func SendEmail(toAddress, fromAddress, subject, htmlBody string, attachments []A
 
 	// Write attachments
 	for _, att := range attachments {
-		attachmentHeaders := textproto.MIMEHeader{}
-		attachmentHeaders.Set("Content-Type", fmt.Sprintf("%s; name=\"%s\"", att.ContentType, att.Filename))
-		attachmentHeaders.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", att.Filename))
-		attachmentHeaders.Set("Content-Transfer-Encoding", "base64")
+		attachmentPartHeaders := textproto.MIMEHeader{}
+		attachmentPartHeaders.Set("Content-Type", att.ContentType+"; name=\""+att.Filename+"\"")
+		attachmentPartHeaders.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", att.Filename))
+		attachmentPartHeaders.Set("Content-Transfer-Encoding", "base64")
 
-		attachmentPart, _ := writer.CreatePart(attachmentHeaders)
-		encodedContent := base64.StdEncoding.EncodeToString(att.Content)
-		attachmentPart.Write([]byte(encodedContent))
+		attachmentPart, err := writer.CreatePart(attachmentPartHeaders)
+		if err != nil {
+			return err
+		}
+
+		// Stream encode to handle large files
+		encoder := base64.NewEncoder(base64.StdEncoding, attachmentPart)
+		_, err = encoder.Write(att.Content)
+		if err != nil {
+			return err
+		}
+		encoder.Close()
 	}
 
 	writer.Close()
