@@ -20,6 +20,7 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/google/uuid"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -74,6 +75,176 @@ func CheckEmailLimit(userID int64) error {
 	}
 
 	return err
+}
+
+// DeleteUrlAttachmentHandler handles deleting an attachment from AWS S3 based on a provided URL
+func DeleteUrlAttachmentHandler(c echo.Context) error {
+	// Get the URL of the attachment from the request parameters
+	// urlAttachment := c.Param("url_attachment")
+	// Parse JSON payload
+	var req DeleteAttachmentParam
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request payload",
+		})
+	}
+
+	// Initialize AWS session
+	sess, err := pkg.InitAWS()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to initialize AWS session",
+		})
+	}
+
+	// Create S3 client
+	s3Client := s3.New(sess)
+
+	for _, urlAttachment := range req.URL {
+		// Parse the URL to extract the bucket name and key
+		parsedURL, err := url.Parse(urlAttachment)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid URL",
+			})
+		}
+
+		// Extract the bucket name and key from the URL
+		bucket := strings.Split(parsedURL.Host, ".")[0]
+		key := strings.TrimPrefix(parsedURL.Path, "/")
+
+		// Delete the object from S3
+		_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("Failed to delete object from S3: %v", err),
+			})
+		}
+	}
+
+	// Return a success response
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Attachment deleted successfully",
+	})
+}
+
+// SendEmailUrlAttachmentHandler handles sending emails with attachment URLs
+func SendEmailUrlAttachmentHandler(c echo.Context) error {
+	// Get user ID and email from context
+	userID := c.Get("user_id").(int64)
+
+	emailUser, err := getUserEmail(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
+	}
+
+	// Check email limit
+	if err := CheckEmailLimit(userID); err != nil {
+		return c.JSON(http.StatusTooManyRequests, map[string]string{
+			"error": "Email limit exceeded",
+		})
+	}
+
+	// Parse JSON payload
+	var req SendEmailRequestURLAttachment
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request payload",
+		})
+	}
+
+	// Prepare attachments
+	var attachments []pkg.Attachment
+	for _, url := range req.Attachments {
+		// Extract filename from URL
+		parts := strings.Split(url, "/")
+		filename := parts[len(parts)-1]
+
+		attachments = append(attachments, pkg.Attachment{
+			Filename:    filename,
+			ContentType: "application/octet-stream", // Default content type
+			Content:     nil,                        // Content is not needed for URL attachments
+			URL:         url,
+		})
+	}
+
+	// Send email via pkg/aws
+	err = pkg.SendEmailWithAttachmentURL(req.To, emailUser, req.Subject, req.Body, attachments)
+	if err != nil {
+		fmt.Println("Failed to send email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	// Save email to database
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to start transaction",
+		})
+	}
+	defer tx.Rollback()
+
+	attachmentsJSON, _ := json.Marshal(req.Attachments)
+
+	var preview string
+	length := 25
+	if len(req.Body) > length {
+		preview = req.Body[:length]
+	}
+	originalUsername := strings.Split(emailUser, "@")[0]
+	_, err = tx.Exec(`
+        INSERT INTO emails (
+            user_id,
+            email_type,
+            preview,
+            sender_email,
+            sender_name,
+            subject,
+            body,
+            attachments,
+            timestamp,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        ) 
+        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
+		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
+	if err != nil {
+		fmt.Println("Email sent but Failed to save into DB email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Email sent but Failed to save into DB email",
+		})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to commit transaction",
+		})
+	}
+
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
+
+	// Update limit if sent Email success
+	err = updateLimitSentEmails(userID)
+	if err != nil {
+		fmt.Println("error updateLimitSentEmails", err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Email sent successfully",
+	})
 }
 
 // SendEmailHandler handles sending emails with attachments
@@ -621,7 +792,8 @@ func UploadAttachmentHandler(c echo.Context) error {
 	// Generate a unique key for the file
 	filename := strings.ToLower(file.Filename)
 	filename = strings.ReplaceAll(filename, " ", "_")
-	key := fmt.Sprintf("attachments/sent/%s", filename)
+	uniqueID := uuid.New().String()
+	key := fmt.Sprintf("attachments/sent/%s_%s", uniqueID, filename)
 
 	// Upload the file to S3
 	url, err := pkg.UploadAttachment(content, key, file.Header.Get("Content-Type"))

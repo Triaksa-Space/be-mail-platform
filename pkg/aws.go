@@ -22,6 +22,7 @@ type Attachment struct {
 	Filename    string
 	ContentType string
 	Content     []byte // Base64-encoded content
+	URL         string
 }
 
 func InitAWS() (*session.Session, error) {
@@ -188,8 +189,8 @@ func UploadPreSignAttachment(content []byte, key string, contentType string) (st
 	return urlStr, nil
 }
 
-// SendEmailWithPresig sends an email with optional attachments using AWS SES
-func SendEmailWithPresig(toAddress, fromAddress, subject, htmlBody string, attachments []Attachment) error {
+// SendEmailWithAttachmentURL sends an email with optional attachments using AWS SES
+func SendEmailWithAttachmentURL(toAddress, fromAddress, subject, htmlBody string, attachments []Attachment) error {
 	// Initialize AWS session
 	sess, err := InitAWS()
 	if err != nil {
@@ -210,17 +211,8 @@ func SendEmailWithPresig(toAddress, fromAddress, subject, htmlBody string, attac
 	// Upload attachments to S3 and include links in the email body
 	var attachmentLinks []string
 	for _, att := range attachments {
-		// Generate a unique key for the attachment
-		key := fmt.Sprintf("attachments/%s", att.Filename)
-
-		// Upload the attachment to S3
-		url, err := UploadPreSignAttachment(att.Content, key, att.ContentType)
-		if err != nil {
-			return fmt.Errorf("failed to upload attachment to S3: %v", err)
-		}
-
 		// Add the pre-signed URL to the list of attachment links
-		attachmentLinks = append(attachmentLinks, fmt.Sprintf("<a href=\"%s\">%s</a>", url, att.Filename))
+		attachmentLinks = append(attachmentLinks, fmt.Sprintf("<a href=\"%s\">%s</a>", att.URL, att.Filename))
 	}
 
 	// Append attachment links to the email body

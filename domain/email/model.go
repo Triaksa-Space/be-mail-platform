@@ -45,6 +45,17 @@ type SendEmailRequest struct {
 	Attachments []Attachment `json:"attachments"`
 }
 
+type DeleteAttachmentParam struct {
+	URL []string `json:"url"`
+}
+
+type SendEmailRequestURLAttachment struct {
+	To          string   `json:"to"`
+	Subject     string   `json:"subject"`
+	Body        string   `json:"body"`
+	Attachments []string `json:"attachments"` // URLs of the attachments
+}
+
 // Convert timestamps to relative time
 type EmailResponse struct {
 	Email

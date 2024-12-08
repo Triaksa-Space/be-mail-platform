@@ -58,6 +58,8 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(admin)) // user id - sync mailbox
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
 	emailGroup.POST("/send", email.SendEmailHandler)
+	emailGroup.POST("/send/url_attachment", email.SendEmailUrlAttachmentHandler)
+	emailGroup.POST("/delete-attachment", email.DeleteUrlAttachmentHandler)
 	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(admin))
 	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(admin)) // Admin-only
 
