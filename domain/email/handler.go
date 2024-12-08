@@ -583,6 +583,60 @@ func formatRelativeTime(t time.Time) string {
 	}
 }
 
+// UploadAttachmentHandler handles the file upload to AWS S3
+func UploadAttachmentHandler(c echo.Context) error {
+	// Parse the multipart form data
+	form, err := c.MultipartForm()
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid form data",
+		})
+	}
+
+	// Get the file from the form data
+	files := form.File["attachment"]
+	if len(files) == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "No file uploaded",
+		})
+	}
+
+	file := files[0]
+	src, err := file.Open()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to open attachment",
+		})
+	}
+	defer src.Close()
+
+	// Read the file content
+	content, err := io.ReadAll(src)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to read attachment",
+		})
+	}
+
+	// Generate a unique key for the file
+	filename := strings.ToLower(file.Filename)
+	filename = strings.ReplaceAll(filename, " ", "_")
+	key := fmt.Sprintf("attachments/sent/%s", filename)
+
+	// Upload the file to S3
+	url, err := pkg.UploadAttachment(content, key, file.Header.Get("Content-Type"))
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to upload file to S3: %v", err),
+		})
+	}
+
+	// Return the pre-signed URL of the uploaded file
+	return c.JSON(http.StatusOK, map[string]string{
+		"url": url,
+	})
+}
+
 // func GetInboxHandler(c echo.Context) error {
 // 	// // Extract user email from context (assuming middleware sets this)
 // 	// userEmail := c.Get("user_email").(string)
