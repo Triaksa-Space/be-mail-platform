@@ -600,6 +600,16 @@ func ListUsersHandler(c echo.Context) error {
 		pageSize = 10 // Default page size
 	}
 
+	// Get sorting parameters
+	sortBy := c.QueryParam("sort_by")
+	sortOrder := c.QueryParam("sort_order")
+	if sortOrder != "asc" && sortOrder != "desc" {
+		sortOrder = "desc" // Default sort order
+	}
+	if sortBy != "last_login" && sortBy != "created_at" {
+		sortBy = "last_login" // Default sort by
+	}
+
 	// Calculate offset
 	offset := (page - 1) * pageSize
 
@@ -607,6 +617,7 @@ func ListUsersHandler(c echo.Context) error {
 	var err error
 	var totalCount int
 	countQuery := "SELECT COUNT(*) FROM users WHERE role_id = 1"
+	fmt.Println("countQuery", countQuery)
 	if searchEmail != "" {
 		countQuery += " AND email LIKE ?"
 		err = config.DB.Get(&totalCount, countQuery, "%"+searchEmail+"%")
@@ -614,6 +625,7 @@ func ListUsersHandler(c echo.Context) error {
 		err = config.DB.Get(&totalCount, countQuery)
 	}
 	if err != nil {
+		fmt.Println("error countQuery", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
@@ -623,13 +635,14 @@ func ListUsersHandler(c echo.Context) error {
 	if searchEmail != "" {
 		query += " AND email LIKE ?"
 	}
-	query += " ORDER BY last_login DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY " + sortBy + " " + sortOrder + " LIMIT ? OFFSET ?"
 	if searchEmail != "" {
 		err = config.DB.Select(&users, query, "%"+searchEmail+"%", pageSize, offset)
 	} else {
 		err = config.DB.Select(&users, query, pageSize, offset)
 	}
 	if err != nil {
+		fmt.Println("error query", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
