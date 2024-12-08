@@ -603,23 +603,32 @@ func ListUsersHandler(c echo.Context) error {
 	// Calculate offset
 	offset := (page - 1) * pageSize
 
-	// Get total count
+	// Get total count of users
+	var err error
 	var totalCount int
-	err := config.DB.Get(&totalCount, "SELECT COUNT(*) FROM users WHERE role_id = 1")
+	countQuery := "SELECT COUNT(*) FROM users WHERE role_id = 1"
+	if searchEmail != "" {
+		countQuery += " AND email LIKE ?"
+		err = config.DB.Get(&totalCount, countQuery, "%"+searchEmail+"%")
+	} else {
+		err = config.DB.Get(&totalCount, countQuery)
+	}
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Fetch paginated users
 	var users []User
-	query := "SELECT * FROM users WHERE role_id = 1 "
+	query := "SELECT * FROM users WHERE role_id = 1"
 	if searchEmail != "" {
-		query = query + " AND email LIKE '%" + searchEmail + "%' "
+		query += " AND email LIKE ?"
 	}
-	query = query + " ORDER BY last_login DESC LIMIT ? OFFSET ?"
-	err = config.DB.Select(&users,
-		query,
-		pageSize, offset)
+	query += " ORDER BY last_login DESC LIMIT ? OFFSET ?"
+	if searchEmail != "" {
+		err = config.DB.Select(&users, query, "%"+searchEmail+"%", pageSize, offset)
+	} else {
+		err = config.DB.Select(&users, query, pageSize, offset)
+	}
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
