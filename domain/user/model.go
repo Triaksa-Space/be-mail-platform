@@ -25,6 +25,7 @@ type ChangePasswordRequest struct {
 
 type AdminChangePasswordRequest struct {
 	UserID      int    `json:"user_id"`
+	OldPassword string `json:"old_password"`
 	NewPassword string `json:"new_password" validate:"required,min=6"`
 }
 

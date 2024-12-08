@@ -67,6 +67,10 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
+	if req.UserID == 0 {
+		req.UserID = int(superAdminID)
+	}
+
 	// Fetch user data from the database
 	var hashedPassword string
 	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
@@ -75,15 +79,17 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	// // Check if the old password is correct
-	// if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
-	// 	return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
-	// }
+	if req.UserID != 0 && req.OldPassword != "" {
+		// Check if the old password is correct
+		if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
+		}
 
-	// // Check if the new password is the same as the old password
-	// if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
-	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
-	// }
+		// Check if the new password is the same as the old password
+		if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
+		}
+	}
 
 	// Hash the new password
 	newHashedPassword, err := utils.HashPassword(req.NewPassword)
