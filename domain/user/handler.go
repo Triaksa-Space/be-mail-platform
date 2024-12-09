@@ -579,7 +579,7 @@ func ListAdminUsersHandler(c echo.Context) error {
 	if searchUsername != "" {
 		query = query + " AND email LIKE '%" + searchUsername + "%' "
 	}
-	query = query + " ORDER BY " + sortFields + " DESC"
+	query = query + " ORDER BY " + sortFields
 	err := config.DB.Select(&users,
 		query)
 	if err != nil {
