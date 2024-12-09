@@ -52,9 +52,10 @@ type BulkCreateUserRequest struct {
 }
 
 type PaginatedUsers struct {
-	Users      []User `json:"users"`
-	TotalCount int    `json:"total_count"`
-	Page       int    `json:"page"`
-	PageSize   int    `json:"page_size"`
-	TotalPages int    `json:"total_pages"`
+	Users       []User `json:"users"`
+	ActiveCount int    `json:"active_count"`
+	TotalCount  int    `json:"total_count"`
+	Page        int    `json:"page"`
+	PageSize    int    `json:"page_size"`
+	TotalPages  int    `json:"total_pages"`
 }

@@ -616,16 +616,23 @@ func ListUsersHandler(c echo.Context) error {
 	// Get total count of users
 	var err error
 	var totalCount int
+	var activeCount int
 	countQuery := "SELECT COUNT(*) FROM users WHERE role_id = 1"
-	fmt.Println("countQuery", countQuery)
 	if searchEmail != "" {
 		countQuery += " AND email LIKE ?"
-		err = config.DB.Get(&totalCount, countQuery, "%"+searchEmail+"%")
+		err = config.DB.Get(&activeCount, countQuery, "%"+searchEmail+"%")
 	} else {
-		err = config.DB.Get(&totalCount, countQuery)
+		err = config.DB.Get(&activeCount, countQuery)
 	}
 	if err != nil {
-		fmt.Println("error countQuery", err)
+		fmt.Println("error countQuery activeCount", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	totalCountQuery := "SELECT COUNT(*) FROM users WHERE role_id = 1"
+	err = config.DB.Get(&totalCount, totalCountQuery)
+	if err != nil {
+		fmt.Println("error countQuery totalCount", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
@@ -650,11 +657,12 @@ func ListUsersHandler(c echo.Context) error {
 	totalPages := (totalCount + pageSize - 1) / pageSize
 
 	response := PaginatedUsers{
-		Users:      users,
-		TotalCount: totalCount,
-		Page:       page,
-		PageSize:   pageSize,
-		TotalPages: totalPages,
+		Users:       users,
+		TotalCount:  totalCount,
+		ActiveCount: activeCount,
+		Page:        page,
+		PageSize:    pageSize,
+		TotalPages:  totalPages,
 	}
 
 	return c.JSON(http.StatusOK, response)
