@@ -128,19 +128,22 @@ func ChangePasswordHandler(c echo.Context) error {
 
 	// Fetch user data from the database
 	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ? and (role_id = 1 or role_id =2)", userID)
+	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", userID)
 	if err != nil {
+		fmt.Println("error fetch user data", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	if req.OldPassword != "" {
 		// Check if the old password is correct
 		if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
+			fmt.Println("error CheckPasswordHash", err)
 			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
 		}
 
 		// Check if the new password is the same as the old password
 		if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
+			fmt.Println("error CheckPasswordHash", err)
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
 		}
 	}
@@ -148,12 +151,14 @@ func ChangePasswordHandler(c echo.Context) error {
 	// Hash the new password
 	newHashedPassword, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
+		fmt.Println("error HashPassword", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	// Update the user's password in the database
 	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, userID)
 	if err != nil {
+		fmt.Println("error update password", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
