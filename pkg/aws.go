@@ -208,16 +208,71 @@ func SendEmailWithAttachmentURL(toAddress, fromAddress, subject, htmlBody string
 		fromAddress, toAddress, subject, writer.Boundary())
 	emailRaw.Write([]byte(emailHeaders))
 
-	// Upload attachments to S3 and include links in the email body
-	var attachmentLinks []string
-	for _, att := range attachments {
-		// Add the pre-signed URL to the list of attachment links
-		attachmentLinks = append(attachmentLinks, fmt.Sprintf("<a href=\"%s\">%s</a>", att.URL, att.Filename))
+	// Calculate items per row and create rows of attachments
+	const itemsPerRow = 4
+	var attachmentRows []string
+	var currentRow []string
+
+	for i, att := range attachments {
+		transformedFilename := transformFilename(att.Filename)
+		attachmentItem := fmt.Sprintf(`
+        <div style="display: inline-block; margin: 0 10px; width: calc(25%% - 20px); min-width: 200px; vertical-align: top;">
+            <div style="border: 1px solid #e0e0e0; border-radius: 4px; background: #f8f9fa; padding: 12px; 
+                        transition: all 0.2s ease-in-out; cursor: pointer;"
+                 onmouseover="this.style.backgroundColor='#f0f0f0'; this.style.boxShadow='0 2px 5px rgba(0,0,0,0.1)'" 
+                 onmouseout="this.style.backgroundColor='#f8f9fa'; this.style.boxShadow='none'">
+                <a href="%s" style="text-decoration: none;" download="%s">
+                    <table cellpadding="0" cellspacing="0" style="width: 100%%;">
+                        <tr>
+                            <td style="width: 36px; vertical-align: top;">
+                                <img src="https://www.gstatic.com/images/icons/material/system_gm/1x/attach_file_grey600_24dp.png" 
+                                     alt="Attachment" style="width: 24px; height: 24px;">
+                            </td>
+                            <td style="padding-left: 8px;">
+                                <div style="font-family: Arial, sans-serif;">
+                                    <div style="color: #1a73e8; font-size: 14px; 
+                                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" 
+                                         title="%s">%s</div>
+                                    <div style="color: #5f6368; font-size: 12px; margin-top: 4px;">
+                                        Click to download
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </a>
+            </div>
+        </div>
+        `, att.URL, att.Filename, transformedFilename, transformedFilename)
+
+		currentRow = append(currentRow, attachmentItem)
+
+		// When we reach itemsPerRow items or it's the last item, create a row
+		if len(currentRow) == itemsPerRow || i == len(attachments)-1 {
+			row := fmt.Sprintf(`
+            <div style="display: flex; justify-content: flex-start; margin-bottom: 20px; flex-wrap: wrap;">
+                %s
+            </div>`, strings.Join(currentRow, ""))
+			attachmentRows = append(attachmentRows, row)
+			currentRow = []string{} // Reset current row
+		}
 	}
 
-	// Append attachment links to the email body
-	if len(attachmentLinks) > 0 {
-		htmlBody += "<br><br>Attachments:<br>" + strings.Join(attachmentLinks, "<br>")
+	// If there are attachments, append them to the HTML body
+	if len(attachmentRows) > 0 {
+		val := ""
+		if len(attachments) > 1 {
+			val = "s"
+		}
+
+		htmlBody += fmt.Sprintf(`
+            <div style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 20px;">
+                <div style="color: #5f6368; font-family: Arial, sans-serif; font-size: 14px; margin-bottom: 10px;">
+                    %d Attachment%s
+                </div>
+                %s
+            </div>
+        `, len(attachments), val, strings.Join(attachmentRows, ""))
 	}
 
 	// Write the HTML body part
@@ -228,6 +283,8 @@ func SendEmailWithAttachmentURL(toAddress, fromAddress, subject, htmlBody string
 	htmlPart, _ := writer.CreatePart(htmlPartHeaders)
 	encodedBody := base64.StdEncoding.EncodeToString([]byte(htmlBody))
 	htmlPart.Write([]byte(encodedBody))
+
+	fmt.Println("htmlPart", htmlPart)
 
 	writer.Close()
 
@@ -244,6 +301,18 @@ func SendEmailWithAttachmentURL(toAddress, fromAddress, subject, htmlBody string
 	}
 
 	return nil
+}
+
+// TransformFilename transforms the filename to the desired format
+func transformFilename(filename string) string {
+	// Split the filename by underscore
+	parts := strings.Split(filename, "_")
+	if len(parts) > 1 {
+		// Return the last part of the split filename
+		return parts[len(parts)-1]
+	}
+	// Return the original filename if it doesn't contain an underscore
+	return filename
 }
 
 // SendEmail sends an email with optional attachments using AWS SES
