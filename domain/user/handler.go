@@ -641,7 +641,6 @@ func ListUsersHandler(c echo.Context) error {
 		query += " AND email LIKE ?"
 	}
 	query += " ORDER BY " + sortFields + " LIMIT ? OFFSET ?"
-	fmt.Println("query", query)
 	if searchEmail != "" {
 		err = config.DB.Select(&users, query, "%"+searchEmail+"%", pageSize, offset)
 	} else {
