@@ -566,13 +566,20 @@ func GetUserMeHandler(c echo.Context) error {
 
 func ListAdminUsersHandler(c echo.Context) error {
 	searchUsername := c.QueryParam("email")
+
+	// Get sorting parameters
+	sortFields := c.QueryParam("sort_fields")
+	if sortFields == "" {
+		sortFields = "last_login desc" // Default sort field
+	}
+
 	// Fetch paginated users
 	var users []User
 	query := "SELECT * FROM users WHERE role_id = 2 "
 	if searchUsername != "" {
 		query = query + " AND email LIKE '%" + searchUsername + "%' "
 	}
-	query = query + " ORDER BY last_login DESC"
+	query = query + " ORDER BY " + sortFields + " DESC"
 	err := config.DB.Select(&users,
 		query)
 	if err != nil {
@@ -604,7 +611,6 @@ func ListUsersHandler(c echo.Context) error {
 	if sortFields == "" {
 		sortFields = "last_login desc" // Default sort field
 	}
-	fmt.Println("sortFields", sortFields)
 
 	// Calculate offset
 	offset := (page - 1) * pageSize
