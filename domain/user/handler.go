@@ -153,6 +153,19 @@ func LoginHandler(c echo.Context) error {
 			return c.JSON(http.StatusTooManyRequests, map[string]string{
 				"error": "Too many failed login attempts. Account locked for 10 minutes.",
 			})
+		} else if attempts.FailedAttempts == 3 {
+			// Just update the attempts count
+			_, updateErr := config.DB.Exec(`
+				UPDATE user_login_attempts
+				SET failed_attempts = ?, last_attempt_time = ?
+				WHERE username = ?
+			`, attempts.FailedAttempts, now, req.Email)
+			if updateErr != nil {
+				fmt.Println("Error updating attempts on password mismatch:", updateErr)
+			}
+			return c.JSON(http.StatusTooManyRequests, map[string]string{
+				"error": "Careful! One more failed attempt will disable login for 10 minutes.",
+			})
 		} else {
 			// Just update the attempts count
 			_, updateErr := config.DB.Exec(`
