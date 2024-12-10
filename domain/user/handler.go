@@ -220,6 +220,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 
 func CreateUserHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
+	fmt.Println("userID", userID)
 	req := new(CreateUserRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -230,6 +231,7 @@ func CreateUserHandler(c echo.Context) error {
 		fmt.Println("error getUserAdminByID", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
+	fmt.Println("userName", userName)
 
 	// if err := c.Validate(req); err != nil {
 	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -320,6 +322,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 				username = fmt.Sprintf("%s%d@%s", req.BaseName, i, req.Domain)
 			}
 		}
+		username = strings.ToLower(username)
 
 		// Check if the base username exists
 		var exists bool
@@ -705,7 +708,7 @@ func getUserAdminByID(userID int64) (string, error) {
 	query := `
         SELECT email
         FROM users
-        WHERE id = ? AND role_id = 2 OR role_id = 0
+        WHERE id = ? AND (role_id = 2 OR role_id = 0) limit 1
     `
 
 	// Execute the query
