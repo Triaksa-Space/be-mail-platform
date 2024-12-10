@@ -31,97 +31,164 @@ func LoginHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	// Check if the user is blocked
-	var blockedUntil sql.NullTime
-	err := config.DB.Get(&blockedUntil, "SELECT blocked_until FROM user_login_attempts WHERE username = ?", req.Email)
-	fmt.Println("err", err)
-	if err != nil && err != sql.ErrNoRows {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	now := time.Now()
+
+	// Get user attempts info
+	type AttemptsInfo struct {
+		FailedAttempts int          `db:"failed_attempts"`
+		BlockedUntil   sql.NullTime `db:"blocked_until"`
+	}
+	var attempts AttemptsInfo
+
+	err := config.DB.Get(&attempts, `
+		SELECT failed_attempts, blocked_until 
+		FROM user_login_attempts
+		WHERE username = ?
+	`, req.Email)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// If no record found, create a default entry with zero attempts
+			_, err = config.DB.Exec(`
+				INSERT INTO user_login_attempts (username, failed_attempts, last_attempt_time)
+				VALUES (?, 0, ?)
+			`, req.Email, now)
+			if err != nil {
+				fmt.Println("Error inserting initial attempts record:", err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
+
+			// Refresh attempts info after insert
+			err = config.DB.Get(&attempts, `
+				SELECT failed_attempts, blocked_until 
+				FROM user_login_attempts
+				WHERE username = ?
+			`, req.Email)
+			if err != nil {
+				fmt.Println("Error fetching attempts after insert:", err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
+		} else {
+			fmt.Println("Error fetching attempts:", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		}
 	}
 
-	fmt.Println("blockedUntil", blockedUntil)
-
-	now := time.Now()
-	if blockedUntil.Valid && blockedUntil.Time.After(now) {
-		remaining := blockedUntil.Time.Sub(now)
+	// Check if user is currently blocked
+	if attempts.BlockedUntil.Valid && attempts.BlockedUntil.Time.After(now) {
+		remaining := attempts.BlockedUntil.Time.Sub(now)
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
 			"error": fmt.Sprintf("Account temporarily locked. Please try again in %d minutes and %d seconds.",
 				int(remaining.Minutes()), int(remaining.Seconds())%60),
 		})
 	}
 
-	// Handle failed login attempt
-	var attemptCount int
-	err = config.DB.Get(&attemptCount, "SELECT failed_attempts FROM user_login_attempts WHERE username = ?", req.Email)
-
-	if err == sql.ErrNoRows {
-		// First failed attempt
+	// If block period has passed, reset attempts
+	if attempts.BlockedUntil.Valid && attempts.BlockedUntil.Time.Before(now) {
 		_, err = config.DB.Exec(`
-				INSERT INTO user_login_attempts (username, failed_attempts, last_attempt_time)
-				VALUES (?, 1, ?)
-			`, req.Email, now)
+			UPDATE user_login_attempts
+			SET failed_attempts = 0, blocked_until = NULL
+			WHERE username = ?
+		`, req.Email)
 		if err != nil {
-			fmt.Println("err insert new attempt count", err)
+			fmt.Println("Error resetting attempts after block:", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 		}
-	} else if err == nil {
-		attemptCount++
-		if attemptCount >= 4 {
-			// Block the user
-			blockedUntilTime := now.Add(10 * time.Minute)
-			_, err = config.DB.Exec(`
+		attempts.FailedAttempts = 0
+		attempts.BlockedUntil.Valid = false
+	}
+
+	// Fetch user from the database
+	var user User
+	err = config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// User not found or password mismatch: increment failed attempts
+			attempts.FailedAttempts++
+			if attempts.FailedAttempts >= 4 {
+				// Block user for 10 minutes
+				blockedUntil := now.Add(10 * time.Minute)
+				_, updateErr := config.DB.Exec(`
 					UPDATE user_login_attempts
 					SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
 					WHERE username = ?
-				`, attemptCount, now, blockedUntilTime, req.Email)
-
-			if err == nil {
+				`, attempts.FailedAttempts, now, blockedUntil, req.Email)
+				if updateErr != nil {
+					fmt.Println("Error updating attempts on block:", updateErr)
+				}
 				return c.JSON(http.StatusTooManyRequests, map[string]string{
 					"error": "Too many failed login attempts. Account locked for 10 minutes.",
 				})
-			}
-		} else {
-			// Update attempt count
-			_, err = config.DB.Exec(`
+			} else {
+				// Just update the count
+				_, updateErr := config.DB.Exec(`
 					UPDATE user_login_attempts
 					SET failed_attempts = ?, last_attempt_time = ?
 					WHERE username = ?
-				`, attemptCount, now, req.Email)
-			if err != nil {
-				fmt.Println("err update attempt count", err)
+				`, attempts.FailedAttempts, now, req.Email)
+				if updateErr != nil {
+					fmt.Println("Error updating attempts on failure:", updateErr)
+				}
+			}
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Check password
+	if !utils.CheckPasswordHash(req.Password, user.Password) {
+		// Password mismatch: increment failed attempts
+		attempts.FailedAttempts++
+		if attempts.FailedAttempts >= 4 {
+			// Block user for 10 minutes
+			blockedUntil := now.Add(10 * time.Minute)
+			_, updateErr := config.DB.Exec(`
+				UPDATE user_login_attempts
+				SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
+				WHERE username = ?
+			`, attempts.FailedAttempts, now, blockedUntil, req.Email)
+			if updateErr != nil {
+				fmt.Println("Error updating attempts on block:", updateErr)
+			}
+			return c.JSON(http.StatusTooManyRequests, map[string]string{
+				"error": "Too many failed login attempts. Account locked for 10 minutes.",
+			})
+		} else {
+			// Just update the attempts count
+			_, updateErr := config.DB.Exec(`
+				UPDATE user_login_attempts
+				SET failed_attempts = ?, last_attempt_time = ?
+				WHERE username = ?
+			`, attempts.FailedAttempts, now, req.Email)
+			if updateErr != nil {
+				fmt.Println("Error updating attempts on password mismatch:", updateErr)
 			}
 		}
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
 	}
 
-	var user User
-
-	err = config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
-	fmt.Println("err", err)
-	fmt.Println("ccpass", !utils.CheckPasswordHash(req.Password, user.Password))
-	if err != nil || !utils.CheckPasswordHash(req.Password, user.Password) {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
-	}
-
-	// Successful login - reset the counter
+	// Successful login - reset attempts
 	_, err = config.DB.Exec(`
 		UPDATE user_login_attempts
 		SET failed_attempts = 0, blocked_until = NULL
 		WHERE username = ?
 	`, req.Email)
-
 	if err != nil {
+		fmt.Println("Error resetting attempts on success:", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	token, err := utils.GenerateJWT(user.ID, user.Email, user.RoleID)
 	if err != nil {
-		fmt.Println("GenerateJWT", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		fmt.Println("GenerateJWT error:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
-	// Update last login
+	// Update last login time
 	err = updateLastLogin(user.ID)
 	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+		fmt.Println("error updateLastLogin:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"token": token})
