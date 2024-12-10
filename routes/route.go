@@ -1,9 +1,6 @@
 package routes
 
 import (
-	"time"
-
-	"github.com/Triaksa-Space/be-mail-platform/config"
 	domain "github.com/Triaksa-Space/be-mail-platform/domain/domain_email"
 	"github.com/Triaksa-Space/be-mail-platform/domain/email"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
@@ -13,15 +10,14 @@ import (
 )
 
 func RegisterRoutes(e *echo.Echo) {
-	rateLimiterConfig := middleware.RateLimiterConfig{
-		MaxRequests:   5,                // e.g., 5 login attempts
-		Window:        10 * time.Minute, // per 10 minutes
-		BlockDuration: 10 * time.Minute, // block for 10 minutes
-		DB:            config.DB.DB,
-	}
+	// loginLimiter := middleware.LoginAttemptMiddleware(middleware.RateLimiterConfig{
+	// 	MaxAttempts:   4,                // Block after 4 failed attempts
+	// 	BlockDuration: 10 * time.Minute, // Block for 10 minutes
+	// 	DB:            config.DB.DB,     // Your database connection
+	// })
 
 	// User routes
-	e.POST("/login", user.LoginHandler, middleware.RateLimiterMiddleware(rateLimiterConfig)) // it's set to 5 requests per 10 minutes. LRU Cache: Stores up to 1000 IP-based rate limiters to manage memory efficiently.
+	e.POST("/login", user.LoginHandler)
 	e.POST("/logout", user.LogoutHandler, middleware.JWTMiddleware)
 	// e.POST("/sns/notifications", email.CallbackNotifEmailHandler)
 

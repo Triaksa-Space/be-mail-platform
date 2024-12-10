@@ -31,10 +31,85 @@ func LoginHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
+	// Check if the user is blocked
+	var blockedUntil sql.NullTime
+	err := config.DB.Get(&blockedUntil, "SELECT blocked_until FROM user_login_attempts WHERE username = ?", req.Email)
+	fmt.Println("err", err)
+	if err != nil && err != sql.ErrNoRows {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	fmt.Println("blockedUntil", blockedUntil)
+
+	now := time.Now()
+	if blockedUntil.Valid && blockedUntil.Time.After(now) {
+		remaining := blockedUntil.Time.Sub(now)
+		return c.JSON(http.StatusTooManyRequests, map[string]string{
+			"error": fmt.Sprintf("Account temporarily locked. Please try again in %d minutes and %d seconds.",
+				int(remaining.Minutes()), int(remaining.Seconds())%60),
+		})
+	}
+
+	// Handle failed login attempt
+	var attemptCount int
+	err = config.DB.Get(&attemptCount, "SELECT failed_attempts FROM user_login_attempts WHERE username = ?", req.Email)
+
+	if err == sql.ErrNoRows {
+		// First failed attempt
+		_, err = config.DB.Exec(`
+				INSERT INTO user_login_attempts (username, failed_attempts, last_attempt_time)
+				VALUES (?, 1, ?)
+			`, req.Email, now)
+		if err != nil {
+			fmt.Println("err insert new attempt count", err)
+		}
+	} else if err == nil {
+		attemptCount++
+		if attemptCount >= 4 {
+			// Block the user
+			blockedUntilTime := now.Add(10 * time.Minute)
+			_, err = config.DB.Exec(`
+					UPDATE user_login_attempts
+					SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
+					WHERE username = ?
+				`, attemptCount, now, blockedUntilTime, req.Email)
+
+			if err == nil {
+				return c.JSON(http.StatusTooManyRequests, map[string]string{
+					"error": "Too many failed login attempts. Account locked for 10 minutes.",
+				})
+			}
+		} else {
+			// Update attempt count
+			_, err = config.DB.Exec(`
+					UPDATE user_login_attempts
+					SET failed_attempts = ?, last_attempt_time = ?
+					WHERE username = ?
+				`, attemptCount, now, req.Email)
+			if err != nil {
+				fmt.Println("err update attempt count", err)
+			}
+		}
+	}
+
 	var user User
-	err := config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
+
+	err = config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
+	fmt.Println("err", err)
+	fmt.Println("ccpass", !utils.CheckPasswordHash(req.Password, user.Password))
 	if err != nil || !utils.CheckPasswordHash(req.Password, user.Password) {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+	}
+
+	// Successful login - reset the counter
+	_, err = config.DB.Exec(`
+		UPDATE user_login_attempts
+		SET failed_attempts = 0, blocked_until = NULL
+		WHERE username = ?
+	`, req.Email)
+
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	token, err := utils.GenerateJWT(user.ID, user.Email, user.RoleID)
@@ -61,6 +136,12 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 	// Extract user ID from JWT (set by JWT middleware)
 	superAdminID := c.Get("user_id").(int64)
 
+	_, err := getUserAdminByID(superAdminID)
+	if err != nil {
+		fmt.Println("Access Denied")
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Access Denied."})
+	}
+
 	// Bind request body
 	req := new(AdminChangePasswordRequest)
 	if err := c.Bind(req); err != nil {
@@ -73,7 +154,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 
 	// Fetch user data from the database
 	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
+	err = config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
 	if err != nil {
 		fmt.Println("error fetch user data", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -128,7 +209,7 @@ func ChangePasswordHandler(c echo.Context) error {
 
 	// Fetch user data from the database
 	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", userID)
+	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
 	if err != nil {
 		fmt.Println("error fetch user data", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -156,7 +237,7 @@ func ChangePasswordHandler(c echo.Context) error {
 	}
 
 	// Update the user's password in the database
-	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, userID)
+	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, req.UserID)
 	if err != nil {
 		fmt.Println("error update password", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -220,7 +301,6 @@ func CreateUserAdminHandler(c echo.Context) error {
 
 func CreateUserHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
-	fmt.Println("userID", userID)
 	req := new(CreateUserRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -231,7 +311,6 @@ func CreateUserHandler(c echo.Context) error {
 		fmt.Println("error getUserAdminByID", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-	fmt.Println("userName", userName)
 
 	// if err := c.Validate(req); err != nil {
 	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
