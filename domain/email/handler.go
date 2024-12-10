@@ -1461,7 +1461,7 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 	err := config.DB.Get(&emailCount, `
 		SELECT COUNT(*) 
 		FROM emails 
-		WHERE user_id = ?
+		WHERE user_id = ? and email_type = 'inbox'
 	`, userID)
 	if err != nil {
 		fmt.Printf("Failed to count emails for user %d: %v\n", userID, err)
@@ -1476,7 +1476,7 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 		err = config.DB.Get(&oldestEmailID, `
 			SELECT id 
 			FROM emails 
-			WHERE user_id = ? 
+			WHERE user_id = ? and email_type = 'inbox'
 			ORDER BY created_at ASC 
 			LIMIT 1
 		`, userID)
