@@ -196,7 +196,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 
 	// Insert the user into the database
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
 		req.Username, hashedPassword, 2, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
@@ -245,7 +245,7 @@ func CreateUserHandler(c echo.Context) error {
 
 	// Insert the user into the database
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
 		req.Email, hashedPassword, 1, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
 	)
 	if err != nil {
@@ -374,7 +374,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 		// Insert user
 		_, err = tx.Exec(
-			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), ?, ?, ?, ?)",
+			"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
 			username, hashedPassword, userID, userID, userName, userName,
 		)
 		if err != nil {
