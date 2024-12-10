@@ -427,7 +427,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to send email",
+			"error": err.Error(),
 		})
 	}
 
