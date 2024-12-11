@@ -106,8 +106,8 @@ func LoginHandler(c echo.Context) error {
 			// User not found or password mismatch: increment failed attempts
 			attempts.FailedAttempts++
 			if attempts.FailedAttempts >= 4 {
-				// Block user for 10 minutes
-				blockedUntil := now.Add(10 * time.Minute)
+				// Block user for 5 minutes
+				blockedUntil := now.Add(5 * time.Minute)
 				_, updateErr := config.DB.Exec(`
 					UPDATE user_login_attempts
 					SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
