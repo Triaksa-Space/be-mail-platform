@@ -511,11 +511,19 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
 func GetEmailHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 	emailID := c.Param("id")
-	// TODO: ATTACHMENT DIBUAT TABLE SENDIRI SAJA
+
+	var user user.User
+	err := config.DB.Get(&user, `
+			SELECT id, email, role_id, last_login, sent_emails, last_email_time, created_at, updated_at
+			FROM users 
+			WHERE id = ?`, userID)
+	if err != nil {
+		return err
+	}
 
 	// Fetch email details by ID
 	var email Email
-	err := config.DB.Get(&email, `SELECT id, 
+	err = config.DB.Get(&email, `SELECT id, 
             user_id, 
             sender_email, sender_name, 
             subject, 
@@ -541,10 +549,12 @@ func GetEmailHandler(c echo.Context) error {
 		fmt.Println("error updateLastLogin", err)
 	}
 
-	// Update isRead
-	err = updateIsRead(emailID)
-	if err != nil {
-		fmt.Println("error updateIsRead", err)
+	if user.RoleID == 1 {
+		// Update isRead
+		err = updateIsRead(emailID)
+		if err != nil {
+			fmt.Println("error updateIsRead", err)
+		}
 	}
 
 	return c.JSON(http.StatusOK, emailResp)
