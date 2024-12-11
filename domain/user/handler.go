@@ -117,7 +117,7 @@ func LoginHandler(c echo.Context) error {
 					fmt.Println("Error updating attempts on block:", updateErr)
 				}
 				return c.JSON(http.StatusTooManyRequests, map[string]string{
-					"error": "Too many failed login attempts. Account locked for 10 minutes.",
+					"error": "Too many failed login attempts. Account locked for 5 minutes.",
 				})
 			} else {
 				// Just update the count
@@ -140,8 +140,8 @@ func LoginHandler(c echo.Context) error {
 		// Password mismatch: increment failed attempts
 		attempts.FailedAttempts++
 		if attempts.FailedAttempts >= 4 {
-			// Block user for 10 minutes
-			blockedUntil := now.Add(10 * time.Minute)
+			// Block user for 5 minutes
+			blockedUntil := now.Add(5 * time.Minute)
 			_, updateErr := config.DB.Exec(`
 				UPDATE user_login_attempts
 				SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
@@ -151,7 +151,7 @@ func LoginHandler(c echo.Context) error {
 				fmt.Println("Error updating attempts on block:", updateErr)
 			}
 			return c.JSON(http.StatusTooManyRequests, map[string]string{
-				"error": "Too many failed login attempts. Account locked for 10 minutes.",
+				"error": "Too many failed login attempts. Account locked for 5 minutes.",
 			})
 		} else if attempts.FailedAttempts == 3 {
 			// Just update the attempts count
@@ -164,7 +164,7 @@ func LoginHandler(c echo.Context) error {
 				fmt.Println("Error updating attempts on password mismatch:", updateErr)
 			}
 			return c.JSON(http.StatusTooManyRequests, map[string]string{
-				"error": "Careful! One more failed attempt will disable login for 10 minutes.",
+				"error": "Careful! One more failed attempt will disable login for 5 minutes.",
 			})
 		} else {
 			// Just update the attempts count
