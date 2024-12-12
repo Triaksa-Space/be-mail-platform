@@ -41,5 +41,7 @@ func SendEmailSMTP(from, to, subject, body string, attachments []Attachment) err
 		return err
 	}
 
+	fmt.Println("SUKSES")
+
 	return nil
 }
