@@ -67,6 +67,10 @@ jobs:
         mkdir -p build
         go build -o build/sync cmd/main.go
 
+    - name: Copy names.csv to build directory
+      run: |
+        cp names.csv build/names.csv
+
     - name: Prepare deployment package
       run: |
         echo "Creating deployment package..."
