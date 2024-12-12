@@ -55,6 +55,7 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.POST("/send/smtp", email.SendEmailSMTPHandler)
+	emailGroup.POST("/send/test/haraka", email.SendEmailSMTPHHandler)
 	emailGroup.POST("/send/url_attachment", email.SendEmailUrlAttachmentHandler)
 	emailGroup.POST("/delete-attachment", email.DeleteUrlAttachmentHandler)
 	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(admin))

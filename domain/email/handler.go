@@ -388,6 +388,146 @@ func SendEmailHandler(c echo.Context) error {
 	})
 }
 
+func SendEmailSMTPHHandler(c echo.Context) error {
+	// Get user ID and email from context
+	userID := c.Get("user_id").(int64)
+
+	emailUser, err := getUserEmail(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
+	}
+
+	// Check email limit
+	if err := CheckEmailLimit(userID); err != nil {
+		return c.JSON(http.StatusTooManyRequests, map[string]string{
+			"error": "Email limit exceeded",
+		})
+	}
+
+	// Parse form data
+	to := c.FormValue("to")
+	subject := c.FormValue("subject")
+	body := c.FormValue("body")
+
+	// Prepare attachments and upload to S3
+	var attachments []pkg.Attachment
+	var attachmentURLs []string
+
+	form, err := c.MultipartForm()
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid form data",
+		})
+	}
+
+	files := form.File["attachments"]
+	for _, file := range files {
+		src, err := file.Open()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to open attachment",
+			})
+		}
+		defer src.Close()
+
+		content, err := io.ReadAll(src)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to read attachment",
+			})
+		}
+
+		// Convert filename to lowercase and replace spaces with underscores
+		filename := strings.ToLower(file.Filename)
+		filename = strings.ReplaceAll(filename, " ", "_")
+
+		// Append the attachment URL to the list
+		attachmentURLs = append(attachmentURLs, filename)
+
+		// Prepare the attachment for sending email
+		attachments = append(attachments, pkg.Attachment{
+			Filename:    filename,
+			ContentType: file.Header.Get("Content-Type"),
+			Content:     content,
+		})
+	}
+
+	// Send email via pkg/aws
+	err = pkg.SendEmailSMTP(emailUser, to, subject, body, attachments)
+	if err != nil {
+		fmt.Println("Failed to send email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	// Save email to database
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to start transaction",
+		})
+	}
+	defer tx.Rollback()
+
+	attachmentsJSON, _ := json.Marshal(attachmentURLs)
+
+	var preview string
+	length := 25
+	if len(body) > length {
+		preview = body[:length]
+	}
+	originalUsername := strings.Split(emailUser, "@")[0]
+	_, err = tx.Exec(`
+        INSERT INTO emails (
+            user_id,
+            email_type,
+            preview,
+            sender_email,
+            sender_name,
+            subject,
+            body,
+            attachments,
+            timestamp,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        ) 
+        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
+		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
+	if err != nil {
+		fmt.Println("Email sent but Failed to save into DB email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Email sent but Failed to save into DB email",
+		})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to commit transaction",
+		})
+	}
+
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
+
+	// Update limit if sent Email success
+	err = updateLimitSentEmails(userID)
+	if err != nil {
+		fmt.Println("error updateLimitSentEmails", err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Email sent successfully",
+	})
+}
+
 // SendEmailHandler handles sending emails with attachments
 func SendEmailSMTPHandler(c echo.Context) error {
 	// Get user ID and email from context
@@ -664,7 +804,23 @@ func GetEmailHandler(c echo.Context) error {
 
 	// Fetch email details by ID
 	var email Email
-	err = config.DB.Get(&email, `SELECT id, 
+	if user.RoleID == 1 {
+		err = config.DB.Get(&email, `SELECT id, 
+            user_id, 
+            sender_email, sender_name, 
+            subject, 
+            body,
+			preview,
+			message_id,
+			attachments,
+            timestamp, 
+            created_at, 
+            updated_at  FROM emails WHERE id = ? and user_id ? and email_type = "inbox"`, emailID, user.ID)
+		if err != nil {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+		}
+	} else {
+		err = config.DB.Get(&email, `SELECT id, 
             user_id, 
             sender_email, sender_name, 
             subject, 
@@ -675,8 +831,9 @@ func GetEmailHandler(c echo.Context) error {
             timestamp, 
             created_at, 
             updated_at  FROM emails WHERE id = ? and email_type = "inbox"`, emailID)
-	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+		if err != nil {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+		}
 	}
 
 	var emailResp EmailResponse
