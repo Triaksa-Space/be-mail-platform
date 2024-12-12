@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"mime/multipart"
-	"net/smtp"
 	"net/textproto"
 	"strings"
 	"time"
@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/spf13/viper"
+	"gopkg.in/gomail.v2"
 )
 
 // Attachment represents an email attachment
@@ -304,26 +305,35 @@ func SendEmailWithAttachmentURL(toAddress, fromAddress, subject, htmlBody string
 	return nil
 }
 
+// TransformFilename transforms the filename to the desired format
+func TransformFilename(filename string) string {
+	// Split the filename by underscore
+	parts := strings.Split(filename, "_")
+	if len(parts) > 1 {
+		// Return the last part of the split filename
+		return parts[len(parts)-1]
+	}
+	// Return the original filename if it doesn't contain an underscore
+	return filename
+}
+
+// SendEmailWithHARAKA sends an email with optional attachments using Haraka SMTP server
 func SendEmailWithHARAKA(toAddress, fromAddress, subject, htmlBody string, attachments []Attachment) error {
 	// SMTP server configuration
 	smtpHost := viper.GetString("SMTP_HOST")
-	smtpPort := viper.GetString("SMTP_PORT")
+	smtpPort := viper.GetInt("SMTP_PORT")
 	smtpUser := viper.GetString("SMTP_USERNAME")
 	smtpPassword := viper.GetString("SMTP_PASSWORD")
 
 	fmt.Println("SMTP_HOST: ", smtpHost)
 	fmt.Println("SMTP_USERNAME: ", smtpUser)
 
-	auth := smtp.PlainAuth("", smtpUser, smtpPassword, smtpHost)
-
-	// Build the email body
-	var emailRaw bytes.Buffer
-	writer := multipart.NewWriter(&emailRaw)
-
-	// Write MIME headers
-	emailHeaders := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n",
-		fromAddress, toAddress, subject, writer.Boundary())
-	emailRaw.Write([]byte(emailHeaders))
+	// Create a new email message
+	m := gomail.NewMessage()
+	m.SetHeader("From", fromAddress)
+	m.SetHeader("To", toAddress)
+	m.SetHeader("Subject", subject)
+	m.SetBody("text/html", htmlBody)
 
 	// Calculate items per row and create rows of attachments
 	const itemsPerRow = 4
@@ -331,7 +341,7 @@ func SendEmailWithHARAKA(toAddress, fromAddress, subject, htmlBody string, attac
 	var currentRow []string
 
 	for i, att := range attachments {
-		transformedFilename := transformFilename(att.Filename)
+		transformedFilename := TransformFilename(att.Filename)
 		attachmentItem := fmt.Sprintf(`
         <div style="display: inline-block; margin: 0 10px; width: calc(25%% - 20px); min-width: 200px; vertical-align: top;">
             <div style="border: 1px solid #e0e0e0; border-radius: 4px; background: #f8f9fa; padding: 12px; 
@@ -392,22 +402,17 @@ func SendEmailWithHARAKA(toAddress, fromAddress, subject, htmlBody string, attac
         `, len(attachments), val, strings.Join(attachmentRows, ""))
 	}
 
-	// fmt.Println("htmlBody", htmlBody)
-
-	// Write the HTML body part
-	htmlPartHeaders := textproto.MIMEHeader{}
-	htmlPartHeaders.Set("Content-Type", "text/html; charset=UTF-8")
-	htmlPartHeaders.Set("Content-Transfer-Encoding", "base64")
-
-	htmlPart, _ := writer.CreatePart(htmlPartHeaders)
-	encodedBody := base64.StdEncoding.EncodeToString([]byte(htmlBody))
-	htmlPart.Write([]byte(encodedBody))
-
-	writer.Close()
+	// Add attachments to the email
+	for _, att := range attachments {
+		m.Attach(att.Filename, gomail.SetCopyFunc(func(w io.Writer) error {
+			_, err := w.Write(att.Content)
+			return err
+		}))
+	}
 
 	// Send the email using Haraka SMTP
-	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, fromAddress, []string{toAddress}, emailRaw.Bytes())
-	if err != nil {
+	d := gomail.NewDialer(smtpHost, smtpPort, smtpUser, smtpPassword)
+	if err := d.DialAndSend(m); err != nil {
 		fmt.Println("SendMail via HARAKA err", err)
 		return fmt.Errorf("failed to send email: %v", err)
 	}

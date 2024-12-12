@@ -815,7 +815,7 @@ func GetEmailHandler(c echo.Context) error {
 			attachments,
             timestamp, 
             created_at, 
-            updated_at  FROM emails WHERE id = ? and user_id ? and email_type = "inbox"`, emailID, user.ID)
+            updated_at  FROM emails WHERE id = ? and user_id = ? and email_type = "inbox"`, emailID, user.ID)
 		if err != nil {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
 		}
