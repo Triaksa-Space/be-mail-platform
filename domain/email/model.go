@@ -3,6 +3,7 @@ package email
 import "time"
 
 type Email struct {
+	EncodeID    string    `json:"encode_id"` // Encoded ID
 	ID          int64     `db:"id"`
 	IsRead      bool      `db:"is_read"`
 	UserID      int64     `db:"user_id"`

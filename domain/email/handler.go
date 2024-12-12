@@ -20,6 +20,7 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/google/uuid"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -794,8 +795,16 @@ func GetEmailHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 	emailID := c.Param("id")
 
+	emailIDDecode, err := utils.DecodeID(emailID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid email ID"})
+	}
+
+	// Decode the encoded ID back to the original integer ID
+	emailID = strconv.Itoa(emailIDDecode)
+
 	var user user.User
-	err := config.DB.Get(&user, `
+	err = config.DB.Get(&user, `
 			SELECT id, email, role_id, last_login, sent_emails, last_email_time, created_at, updated_at
 			FROM users 
 			WHERE id = ?`, userID)
@@ -928,6 +937,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 	response := make([]EmailResponse, len(emails))
 	for i, email := range emails {
+		email.EncodeID = utils.EncodeID(int(email.ID))
 		response[i] = EmailResponse{
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
