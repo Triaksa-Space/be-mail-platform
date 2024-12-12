@@ -41,11 +41,9 @@ func SendEmailSMTP(from, to, subject, body string, attachments []Attachment) err
 
 	// Send the email
 	if err := d.DialAndSend(m); err != nil {
-		fmt.Println("Failed to send email:", err)
+		fmt.Println("HARAKA Failed to send email:", err)
 		return err
 	}
-
-	fmt.Println("SUKSES")
 
 	return nil
 }

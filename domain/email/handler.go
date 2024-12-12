@@ -389,6 +389,7 @@ func SendEmailHandler(c echo.Context) error {
 }
 
 func SendEmailSMTPHHandler(c echo.Context) error {
+	fmt.Println("TEST HARAKA")
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
 
