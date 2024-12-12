@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"mime/multipart"
+	"net/smtp"
 	"net/textproto"
 	"strings"
 	"time"
@@ -300,6 +301,118 @@ func SendEmailWithAttachmentURL(toAddress, fromAddress, subject, htmlBody string
 		return fmt.Errorf("failed to send email: %v", err)
 	}
 
+	return nil
+}
+
+func SendEmailWithHARAKA(toAddress, fromAddress, subject, htmlBody string, attachments []Attachment) error {
+	// SMTP server configuration
+	smtpHost := viper.GetString("SMTP_HOST")
+	smtpPort := viper.GetString("SMTP_PORT")
+	smtpUser := viper.GetString("SMTP_USERNAME")
+	smtpPassword := viper.GetString("SMTP_PASSWORD")
+
+	fmt.Println("SMTP_HOST: ", smtpHost)
+	fmt.Println("SMTP_USERNAME: ", smtpUser)
+
+	auth := smtp.PlainAuth("", smtpUser, smtpPassword, smtpHost)
+
+	// Build the email body
+	var emailRaw bytes.Buffer
+	writer := multipart.NewWriter(&emailRaw)
+
+	// Write MIME headers
+	emailHeaders := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n",
+		fromAddress, toAddress, subject, writer.Boundary())
+	emailRaw.Write([]byte(emailHeaders))
+
+	// Calculate items per row and create rows of attachments
+	const itemsPerRow = 4
+	var attachmentRows []string
+	var currentRow []string
+
+	for i, att := range attachments {
+		transformedFilename := transformFilename(att.Filename)
+		attachmentItem := fmt.Sprintf(`
+        <div style="display: inline-block; margin: 0 10px; width: calc(25%% - 20px); min-width: 200px; vertical-align: top;">
+            <div style="border: 1px solid #e0e0e0; border-radius: 4px; background: #f8f9fa; padding: 12px; 
+                        transition: all 0.2s ease-in-out; cursor: pointer;"
+                 onmouseover="this.style.backgroundColor='#f0f0f0'; this.style.boxShadow='0 2px 5px rgba(0,0,0,0.1)'" 
+                 onmouseout="this.style.backgroundColor='#f8f9fa'; this.style.boxShadow='none'">
+                <a href="%s" style="text-decoration: none;" download="%s">
+                    <table cellpadding="0" cellspacing="0" style="width: 100%%;">
+                        <tr>
+                            <td style="width: 36px; vertical-align: top;">
+                                <img src="https://www.gstatic.com/images/icons/material/system_gm/1x/attach_file_grey600_24dp.png" 
+                                     alt="Attachment" style="width: 24px; height: 24px;">
+                            </td>
+                            <td style="padding-left: 8px;">
+                                <div style="font-family: Arial, sans-serif;">
+                                    <div style="color: #1a73e8; font-size: 14px; 
+                                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" 
+                                         title="%s">%s</div>
+                                    <div style="color: #5f6368; font-size: 12px; margin-top: 4px;">
+                                        Click to download
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </a>
+            </div>
+        </div>
+        `, att.URL, att.Filename, transformedFilename, transformedFilename)
+
+		currentRow = append(currentRow, attachmentItem)
+
+		// When we reach itemsPerRow items or it's the last item, create a row
+		if len(currentRow) == itemsPerRow || i == len(attachments)-1 {
+			row := fmt.Sprintf(`
+            <div style="display: flex; justify-content: flex-start; margin-bottom: 20px; flex-wrap: wrap;">
+                %s
+            </div>`, strings.Join(currentRow, ""))
+			attachmentRows = append(attachmentRows, row)
+			currentRow = []string{} // Reset current row
+		}
+	}
+
+	// If there are attachments, append them to the HTML body
+	if len(attachmentRows) > 0 {
+		val := ""
+		if len(attachments) > 1 {
+			val = "s"
+		}
+
+		htmlBody += fmt.Sprintf(`
+            <div style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 20px;">
+                <div style="color: #5f6368; font-family: Arial, sans-serif; font-size: 14px; margin-bottom: 10px;">
+                    %d Attachment%s
+                </div>
+                %s
+            </div>
+        `, len(attachments), val, strings.Join(attachmentRows, ""))
+	}
+
+	// fmt.Println("htmlBody", htmlBody)
+
+	// Write the HTML body part
+	htmlPartHeaders := textproto.MIMEHeader{}
+	htmlPartHeaders.Set("Content-Type", "text/html; charset=UTF-8")
+	htmlPartHeaders.Set("Content-Transfer-Encoding", "base64")
+
+	htmlPart, _ := writer.CreatePart(htmlPartHeaders)
+	encodedBody := base64.StdEncoding.EncodeToString([]byte(htmlBody))
+	htmlPart.Write([]byte(encodedBody))
+
+	writer.Close()
+
+	// Send the email using Haraka SMTP
+	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, fromAddress, []string{toAddress}, emailRaw.Bytes())
+	if err != nil {
+		fmt.Println("SendMail via HARAKA err", err)
+		return fmt.Errorf("failed to send email: %v", err)
+	}
+
+	fmt.Println("Email sent successfully")
 	return nil
 }
 
