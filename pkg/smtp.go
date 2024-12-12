@@ -15,6 +15,10 @@ func SendEmailSMTP(from, to, subject, body string, attachments []Attachment) err
 	smtpUsername := viper.GetString("SMTP_USERNAME")
 	smtpPassword := viper.GetString("SMTP_PASSWORD")
 
+	fmt.Println("SMTP_HOST", smtpHost)
+	fmt.Println("SMTP_PORT", smtpPort)
+	fmt.Println("SMTP_USERNAME", smtpUsername)
+
 	// Create a new email message
 	m := gomail.NewMessage()
 	m.SetHeader("From", from) // Replace with your verified email address
