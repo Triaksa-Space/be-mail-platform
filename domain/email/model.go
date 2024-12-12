@@ -3,24 +3,25 @@ package email
 import "time"
 
 type Email struct {
-	EncodeID    string    `json:"encode_id"` // Encoded ID
-	ID          int64     `db:"id"`
-	IsRead      bool      `db:"is_read"`
-	UserID      int64     `db:"user_id"`
-	SenderEmail string    `db:"sender_email"`
-	SenderName  string    `db:"sender_name"`
-	Subject     string    `db:"subject"`
-	Preview     string    `db:"preview"`
-	Body        string    `db:"body"`
-	BodyEml     string    `db:"body_eml"`
-	EmailType   string    `db:"email_type"`
-	Attachments string    `db:"attachments"` // JSON format
-	MessageID   string    `db:"message_id"`  // Message ID from email provider
-	Timestamp   time.Time `db:"timestamp"`
-	CreatedBy   int64     `db:"created_by"`
-	UpdatedBy   *int      `db:"updated_by"`
-	CreatedAt   time.Time `db:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at"`
+	EmailEncodeID string    `json:"email_encode_id"` // Email Encoded ID
+	UserEncodeID  string    `json:"user_encode_id"`  // User Encoded ID
+	ID            int64     `db:"id"`
+	IsRead        bool      `db:"is_read"`
+	UserID        int64     `db:"user_id"`
+	SenderEmail   string    `db:"sender_email"`
+	SenderName    string    `db:"sender_name"`
+	Subject       string    `db:"subject"`
+	Preview       string    `db:"preview"`
+	Body          string    `db:"body"`
+	BodyEml       string    `db:"body_eml"`
+	EmailType     string    `db:"email_type"`
+	Attachments   string    `db:"attachments"` // JSON format
+	MessageID     string    `db:"message_id"`  // Message ID from email provider
+	Timestamp     time.Time `db:"timestamp"`
+	CreatedBy     int64     `db:"created_by"`
+	UpdatedBy     *int      `db:"updated_by"`
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
 }
 
 type PEmail struct {
@@ -60,6 +61,7 @@ type SendEmailRequestURLAttachment struct {
 // Convert timestamps to relative time
 type EmailResponse struct {
 	Email
+	From            string       `json:"From"`
 	ListAttachments []Attachment `json:"ListAttachments"`
 	RelativeTime    string       `json:"RelativeTime"`
 }

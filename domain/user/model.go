@@ -3,6 +3,7 @@ package user
 import "time"
 
 type User struct {
+	UserEncodeID  string     `json:"user_encode_id"` // User Encoded ID
 	ID            int64      `db:"id"`
 	Email         string     `db:"email"`
 	Password      string     `db:"password"`

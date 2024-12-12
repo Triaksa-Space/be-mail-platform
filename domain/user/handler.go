@@ -707,9 +707,16 @@ func DeleteUserHandler(c echo.Context) error {
 func GetUserHandler(c echo.Context) error {
 	userID := c.Param("id")
 
+	userIDDecode, err := utils.DecodeID(userID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
+	}
+
+	userID = strconv.Itoa(userIDDecode)
+
 	// Fetch user details by ID
 	var user User
-	err := config.DB.Get(&user, "SELECT * FROM users WHERE role_id = 1 AND id = ?", userID)
+	err = config.DB.Get(&user, "SELECT * FROM users WHERE role_id = 1 AND id = ?", userID)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 	}
@@ -759,8 +766,15 @@ func ListAdminUsersHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
+	var encodeUsers []User
+	for _, user := range users {
+		user.UserEncodeID = utils.EncodeID(int(user.ID))
+
+		encodeUsers = append(encodeUsers, user)
+	}
+
 	response := PaginatedUsers{
-		Users: users,
+		Users: encodeUsers,
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -817,11 +831,17 @@ func ListUsersHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
+	var encodeUsers []User
+	for _, user := range users {
+		user.UserEncodeID = utils.EncodeID(int(user.ID))
+		encodeUsers = append(encodeUsers, user)
+	}
+
 	// Calculate total pages
 	totalPages := (totalCount + pageSize - 1) / pageSize
 
 	response := PaginatedUsers{
-		Users:       users,
+		Users:       encodeUsers,
 		TotalCount:  totalCount,
 		ActiveCount: totalCount, // Assuming activeCount is the same as totalCount for now
 		Page:        page,

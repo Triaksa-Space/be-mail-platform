@@ -795,6 +795,8 @@ func GetEmailHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 	emailID := c.Param("id")
 
+	fmt.Println("emailID", emailID)
+
 	emailIDDecode, err := utils.DecodeID(emailID)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid email ID"})
@@ -846,10 +848,14 @@ func GetEmailHandler(c echo.Context) error {
 		}
 	}
 
+	// Get User From Email
+	userFromEmail, _ := getUserEmail(email.UserID)
+
 	var emailResp EmailResponse
 	emailResp.Email = email
 	emailResp.RelativeTime = formatRelativeTime(email.Timestamp)
 	emailResp.ListAttachments = getAttachmentURLs(email.Attachments)
+	emailResp.From = userFromEmail
 
 	// Update last login
 	err = updateLastLogin(userID)
@@ -885,7 +891,14 @@ func ListEmailsHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
-	return c.JSON(http.StatusOK, emails)
+	var encodedEmails []Email
+	for _, email := range emails {
+		email.EmailEncodeID = utils.EncodeID(int(email.ID))
+		email.UserEncodeID = utils.EncodeID(int(email.UserID))
+		encodedEmails = append(encodedEmails, email)
+	}
+
+	return c.JSON(http.StatusOK, encodedEmails)
 }
 
 func SentEmailByIDHandler(c echo.Context) error {
@@ -937,7 +950,8 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 	response := make([]EmailResponse, len(emails))
 	for i, email := range emails {
-		email.EncodeID = utils.EncodeID(int(email.ID))
+		email.EmailEncodeID = utils.EncodeID(int(email.ID))
+		email.UserEncodeID = utils.EncodeID(int(email.UserID))
 		response[i] = EmailResponse{
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
@@ -955,7 +969,13 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 func ListEmailByIDHandler(c echo.Context) error {
 	userIDStr := c.Param("id")
-	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+
+	userIDDecode, err := utils.DecodeID(userIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
+	}
+
+	userID, err := strconv.ParseInt(strconv.Itoa(userIDDecode), 10, 64)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Invalid user ID",
@@ -996,6 +1016,8 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 	response := make([]EmailResponse, len(emails))
 	for i, email := range emails {
+		email.EmailEncodeID = utils.EncodeID(int(email.ID))
+		email.UserEncodeID = utils.EncodeID(int(email.UserID))
 		response[i] = EmailResponse{
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
