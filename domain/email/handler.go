@@ -91,10 +91,34 @@ func HandleEmailBounceHandler(c echo.Context) error {
 	}
 	fmt.Println("Finish refresh internal mailbox")
 
-	var preview string
-	length := 25
-	if len(payload.Data.Bounce.Message) > length {
-		preview = payload.Data.Bounce.Message[:length]
+	// TODO: MAKE STANDARD BOUNCE EMAIL
+	sendTo := ""
+	notificationSubject := ""
+	notificationBody := ""
+	preview := ""
+	if len(payload.Data.To) > 0 {
+		sendTo = payload.Data.To[0]
+	}
+
+	// Check if bounce is 'address not found'
+	if payload.Type == "email.bounced" {
+		// Send custom notification email to sender
+		notificationSubject = "Bounce Notification: Address Not Found"
+		notificationBody = fmt.Sprintf(`
+            <p>Your email to %s failed to deliver because the address was not found.</p>
+            <p>Subject: %s</p>
+            <p>Message: %s</p>
+        `, payload.Data.To[0], payload.Data.Subject, payload.Data.Bounce.Message)
+
+		preview = "Your email to " + sendTo + " failed to deliver because the address was not found."
+	} else {
+		notificationSubject = payload.Data.Subject
+		notificationBody = payload.Data.Bounce.Message
+
+		length := 25
+		if len(payload.Data.Bounce.Message) > length {
+			preview = payload.Data.Bounce.Message[:length]
+		}
 	}
 
 	// Normalize the datetime string
@@ -139,9 +163,9 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		userID,
 		emailSupport,
 		nameSupport,
-		payload.Data.Subject,
+		notificationSubject,
 		preview,
-		payload.Data.Bounce.Message,
+		notificationBody,
 		"inbox", // Set email_type as needed
 		"",
 		payload.Data.EmailID,
