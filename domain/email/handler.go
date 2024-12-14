@@ -35,10 +35,102 @@ type EmailService struct {
 	BucketName string
 }
 
+// Define the payload struct
+type BounceMessage struct {
+	Message string `json:"message"`
+}
+
+type BounceData struct {
+	Bounce    BounceMessage `json:"bounce"`
+	CreatedAt string        `json:"created_at"`
+	EmailID   string        `json:"email_id"`
+	From      string        `json:"from"`
+	Subject   string        `json:"subject"`
+	To        []string      `json:"to"`
+}
+
+type WebhookPayload struct {
+	CreatedAt string     `json:"created_at"`
+	Data      BounceData `json:"data"`
+	Type      string     `json:"type"`
+}
+
 func DeductEmailLimit(userID int64) error {
 	// Increment counter
 	_, err := config.DB.Exec(`UPDATE users SET sent_emails = sent_emails - 1, last_login = NOW() WHERE id = ?`, userID)
 	return err
+}
+
+func HandleEmailBounceHandler(c echo.Context) error {
+	// Bind the JSON payload to the struct
+	var payload WebhookPayload
+	if err := c.Bind(&payload); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request payload",
+		})
+	}
+
+	// Process the data (e.g., log the bounce, update the database, etc.)
+	// For demonstration, we'll just print the payload
+	fmt.Printf("Received webhook payload: %+v\n", payload)
+
+	userID, err := getUserByEmail(payload.Data.From)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
+	}
+
+	// SEND EMAIL TO SENDER using EMAIL_SUPPORT
+	emailSupport := viper.GetString("EMAIL_SUPPORT")
+	nameSupport := viper.GetString("NAME_SUPPORT")
+
+	err = process10Emails(int64(userID), payload.Data.From)
+	if err != nil {
+		fmt.Println("Failed to process incoming emails", err)
+	}
+	fmt.Println("Finish refresh internal mailbox")
+
+	// Insert into user email that his email failed to send
+	// Insert the processed email into the emails table
+	_, err = config.DB.Exec(`
+	INSERT INTO emails (
+		user_id,
+		sender_email,
+		sender_name,
+		subject,
+		preview,
+		body,
+		email_type,
+		attachments,
+		message_id,
+		timestamp,
+		created_at,
+		updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+`,
+		userID,
+		emailSupport,
+		nameSupport,
+		payload.Data.Subject,
+		payload.Data.Bounce.Message,
+		payload.Data.Bounce.Message,
+		"inbox", // Set email_type as needed
+		"",
+		payload.Data.EmailID,
+		payload.Data.CreatedAt,
+	)
+	if err != nil {
+		fmt.Printf("Failed to insert email %s into DB: %v\n", payload.Data.EmailID, err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to insert bounce email into DB",
+		})
+	}
+
+	// Return a success response
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Email bounce notification received",
+	})
 }
 
 func CheckEmailLimit(userID int64) error {
@@ -1913,44 +2005,9 @@ func updateLastLogin(userID int64) error {
 func processIncomingEmails(userID int64, emailSendTo string) error {
 	fmt.Println("START processIncomingEmails", time.Now())
 
-	// Check the number of emails for the user
-	var emailCount int
-	err := config.DB.Get(&emailCount, `
-		SELECT COUNT(*) 
-		FROM emails 
-		WHERE user_id = ? and email_type = 'inbox'
-	`, userID)
+	err := process10Emails(userID, emailSendTo)
 	if err != nil {
-		fmt.Printf("Failed to count emails for user %d: %v\n", userID, err)
-		return err
-	}
-
-	// Delete the oldest email if the user has 10 emails
-	if emailCount > 10 {
-		fmt.Println("Deleting oldest email for user", userID)
-		// Select the ID of the oldest email for the user
-		var oldestEmailID int64
-		err = config.DB.Get(&oldestEmailID, `
-			SELECT id 
-			FROM emails 
-			WHERE user_id = ? and email_type = 'inbox'
-			ORDER BY created_at ASC 
-			LIMIT 1
-		`, userID)
-		if err != nil {
-			fmt.Printf("Failed to select oldest email for user %d: %v\n", userID, err)
-			return err
-		}
-
-		// Delete the oldest email
-		_, err = config.DB.Exec(`
-		DELETE FROM emails 
-		WHERE id = ?
-		`, oldestEmailID)
-		if err != nil {
-			fmt.Printf("Failed to delete oldest email for user %d: %v\n", userID, err)
-			return err
-		}
+		fmt.Println("Failed to process 10 emails", err)
 	}
 
 	// Fetch unprocessed emails for the user from incoming_emails table
@@ -2085,6 +2142,54 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 	return nil
 }
 
+func process10Emails(userID int64, emailSendTo string) error {
+	fmt.Println("START process10Emails", time.Now())
+
+	// Check the number of emails for the user
+	var emailCount int
+	err := config.DB.Get(&emailCount, `
+		SELECT COUNT(*) 
+		FROM emails 
+		WHERE user_id = ? and email_type = 'inbox'
+	`, userID)
+	if err != nil {
+		fmt.Printf("Failed to count emails for user %d: %v\n", userID, err)
+		return err
+	}
+
+	// Delete the oldest email if the user has 10 emails
+	if emailCount > 10 {
+		fmt.Println("Deleting oldest email for user", userID)
+		// Select the ID of the oldest email for the user
+		var oldestEmailID int64
+		err = config.DB.Get(&oldestEmailID, `
+			SELECT id 
+			FROM emails 
+			WHERE user_id = ? and email_type = 'inbox'
+			ORDER BY created_at ASC 
+			LIMIT 1
+		`, userID)
+		if err != nil {
+			fmt.Printf("Failed to select oldest email for user %d: %v\n", userID, err)
+			return err
+		}
+
+		// Delete the oldest email
+		_, err = config.DB.Exec(`
+		DELETE FROM emails 
+		WHERE id = ?
+		`, oldestEmailID)
+		if err != nil {
+			fmt.Printf("Failed to delete oldest email for user %d: %v\n", userID, err)
+			return err
+		}
+	}
+
+	fmt.Println("Finish process10Emails", time.Now())
+
+	return nil
+}
+
 func getUserEmail(userID int64) (string, error) {
 	var emailUser string
 	err := config.DB.Get(&emailUser, `
@@ -2096,4 +2201,17 @@ func getUserEmail(userID int64) (string, error) {
 		return "", err
 	}
 	return emailUser, nil
+}
+
+func getUserByEmail(email string) (int, error) {
+	var emailID int
+	err := config.DB.Get(&emailID, `
+        SELECT id 
+        FROM users 
+        WHERE email = ? LIMIT 1`, email)
+	if err != nil {
+		fmt.Println("Failed to fetch user email:", err)
+		return 0, err
+	}
+	return emailID, nil
 }

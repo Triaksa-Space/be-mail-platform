@@ -19,6 +19,7 @@ func RegisterRoutes(e *echo.Echo) {
 	// User routes
 	e.POST("/login", user.LoginHandler)
 	e.POST("/logout", user.LogoutHandler, middleware.JWTMiddleware)
+	e.POST("/email/bounce", email.HandleEmailBounceHandler)
 	// e.POST("/sns/notifications", email.CallbackNotifEmailHandler)
 
 	superAdminOnly := []int{0}
