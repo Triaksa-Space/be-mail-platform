@@ -73,7 +73,7 @@ func HandleEmailBounceHandler(c echo.Context) error {
 	// Process the data (e.g., log the bounce, update the database, etc.)
 	// For demonstration, we'll just print the payload
 	fmt.Printf("Received webhook payload: %+v\n", payload)
-
+	// fmt.Println("payload.Data.From", payload.Data.From)
 	userID, err := getUserByEmail(payload.Data.From)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -90,6 +90,12 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		fmt.Println("Failed to process incoming emails", err)
 	}
 	fmt.Println("Finish refresh internal mailbox")
+
+	var preview string
+	length := 25
+	if len(payload.Data.Bounce.Message) > length {
+		preview = payload.Data.Bounce.Message[:length]
+	}
 
 	// Insert into user email that his email failed to send
 	// Insert the processed email into the emails table
@@ -113,7 +119,7 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		emailSupport,
 		nameSupport,
 		payload.Data.Subject,
-		payload.Data.Bounce.Message,
+		preview,
 		payload.Data.Bounce.Message,
 		"inbox", // Set email_type as needed
 		"",
@@ -2204,8 +2210,8 @@ func getUserEmail(userID int64) (string, error) {
 }
 
 func getUserByEmail(email string) (int, error) {
-	var emailID int
-	err := config.DB.Get(&emailID, `
+	var userID int
+	err := config.DB.Get(&userID, `
         SELECT id 
         FROM users 
         WHERE email = ? LIMIT 1`, email)
@@ -2213,5 +2219,5 @@ func getUserByEmail(email string) (int, error) {
 		fmt.Println("Failed to fetch user email:", err)
 		return 0, err
 	}
-	return emailID, nil
+	return userID, nil
 }
