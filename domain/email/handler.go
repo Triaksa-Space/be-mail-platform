@@ -1266,21 +1266,24 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 func getAttachmentURLs(attachmentsJSON string) []Attachment {
 	var urls []string
-	if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
-		fmt.Printf("Failed to unmarshal attachments: %v\n", err)
-		return nil
-	}
-
 	attachments := make([]Attachment, len(urls))
-	for i, url := range urls {
-		// Extract filename from URL path
-		parts := strings.Split(url, "/")
-		filename := parts[len(parts)-1]
 
-		attachments[i] = Attachment{
-			URL:         url,
-			ContentType: "",
-			Filename:    filename,
+	if attachmentsJSON != "" {
+		if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
+			fmt.Printf("Failed to unmarshal attachments: %v\n", err)
+			return nil
+		}
+
+		for i, url := range urls {
+			// Extract filename from URL path
+			parts := strings.Split(url, "/")
+			filename := parts[len(parts)-1]
+
+			attachments[i] = Attachment{
+				URL:         url,
+				ContentType: "",
+				Filename:    filename,
+			}
 		}
 	}
 
