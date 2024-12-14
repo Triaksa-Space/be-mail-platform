@@ -1,6 +1,8 @@
 module github.com/Triaksa-Space/be-mail-platform
 
-go 1.20
+go 1.23
+
+toolchain go1.23.2
 
 require (
 	github.com/aws/aws-sdk-go v1.55.5
@@ -35,6 +37,7 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/resend/resend-go/v2 v2.13.0 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/sagikazarmark/locafero v0.4.0 // indirect
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
