@@ -54,6 +54,8 @@ jobs:
         echo "SMTP_USERNAME=${{ secrets.SMTP_USERNAME }}" >> .env
         echo "SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}" >> .env
         echo "EMAIL_SUPPORT=${{ secrets.EMAIL_SUPPORT }}" >> .env
+        echo "NAME_SUPPORT=${{ secrets.NAME_SUPPORT }}" >> .env
+        echo "RESEND_API=${{ secrets.RESEND_API }}" >> .env
         
         echo "✅ Environment file created"
 
