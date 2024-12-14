@@ -97,6 +97,27 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		preview = payload.Data.Bounce.Message[:length]
 	}
 
+	// Normalize the datetime string
+	normalizedTimeStr := strings.Replace(payload.Data.CreatedAt, " ", "T", 1)
+	if strings.HasSuffix(normalizedTimeStr, "+00") || strings.HasSuffix(normalizedTimeStr, "-00") {
+		normalizedTimeStr += ":00"
+	}
+
+	// Define a layout matching the normalized datetime string
+	const layout = "2006-01-02T15:04:05.999999-07:00"
+
+	// Parse the datetime string to a time.Time object
+	timestamp, err := time.Parse(layout, normalizedTimeStr)
+	if err != nil {
+		fmt.Printf("Failed to parse datetime: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to parse datetime",
+		})
+	}
+
+	// Format the time.Time object to a MySQL-compatible datetime string
+	formattedTimestamp := timestamp.Format("2006-01-02 15:04:05")
+
 	// Insert into user email that his email failed to send
 	// Insert the processed email into the emails table
 	_, err = config.DB.Exec(`
@@ -124,12 +145,12 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		"inbox", // Set email_type as needed
 		"",
 		payload.Data.EmailID,
-		payload.Data.CreatedAt,
+		formattedTimestamp,
 	)
 	if err != nil {
 		fmt.Printf("Failed to insert email %s into DB: %v\n", payload.Data.EmailID, err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to insert bounce email into DB",
+			"error": "Failed to insert bounce email into DB" + err.Error(),
 		})
 	}
 
