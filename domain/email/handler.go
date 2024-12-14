@@ -389,6 +389,122 @@ func SendEmailHandler(c echo.Context) error {
 	})
 }
 
+// SendEmailViaResendHandler handles sending emails with attachments
+func SendEmailViaResendHandler(c echo.Context) error {
+	// Get user ID and email from context
+	userID := c.Get("user_id").(int64)
+
+	emailUser, err := getUserEmail(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch user email",
+		})
+	}
+
+	// Check email limit
+	if err := CheckEmailLimit(userID); err != nil {
+		return c.JSON(http.StatusTooManyRequests, map[string]string{
+			"error": "Email limit exceeded",
+		})
+	}
+
+	// Parse JSON payload
+	var req SendEmailRequestURLAttachment
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request payload",
+		})
+	}
+
+	// Prepare attachments
+	var attachments []pkg.Attachment
+	for _, url := range req.Attachments {
+		// Extract filename from URL
+		parts := strings.Split(url, "/")
+		filename := parts[len(parts)-1]
+
+		attachments = append(attachments, pkg.Attachment{
+			Filename:    filename,
+			ContentType: "application/octet-stream", // Default content type
+			Content:     nil,                        // Content is not needed for URL attachments
+			URL:         url,
+		})
+	}
+
+	// Send email via pkg/aws
+	err = pkg.SendEmailViaResend(emailUser, req.To, req.Subject, req.Body, attachments)
+	if err != nil {
+		fmt.Println("Failed to send email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	// Save email to database
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to start transaction",
+		})
+	}
+	defer tx.Rollback()
+
+	attachmentsJSON, _ := json.Marshal(req.Attachments)
+
+	var preview string
+	length := 25
+	if len(req.Body) > length {
+		preview = req.Body[:length]
+	}
+	originalUsername := strings.Split(emailUser, "@")[0]
+	_, err = tx.Exec(`
+        INSERT INTO emails (
+            user_id,
+            email_type,
+            preview,
+            sender_email,
+            sender_name,
+            subject,
+            body,
+            attachments,
+            timestamp,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        ) 
+        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
+		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
+	if err != nil {
+		fmt.Println("Email sent but Failed to save into DB email", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Email sent but Failed to save into DB email",
+		})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to commit transaction",
+		})
+	}
+
+	// Update last login
+	err = updateLastLogin(userID)
+	if err != nil {
+		fmt.Println("error updateLastLogin", err)
+	}
+
+	// Update limit if sent Email success
+	err = updateLimitSentEmails(userID)
+	if err != nil {
+		fmt.Println("error updateLimitSentEmails", err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Email sent successfully",
+	})
+}
+
 func SendEmailSMTPHHandler(c echo.Context) error {
 	fmt.Println("TEST HARAKA")
 	// Get user ID and email from context
