@@ -55,12 +55,6 @@ type WebhookPayload struct {
 	Type      string     `json:"type"`
 }
 
-// IsFromMailria checks if the email is from @mailria or @mailsaja domains
-func IsFromMailria(email string) bool {
-	email = strings.ToLower(strings.TrimSpace(email))
-	return strings.HasSuffix(email, "@mailria.com")
-}
-
 func DeductEmailLimit(userID int64) error {
 	// Increment counter
 	_, err := config.DB.Exec(`UPDATE users SET sent_emails = sent_emails - 1, last_login = NOW() WHERE id = ?`, userID)
@@ -91,7 +85,7 @@ func HandleEmailBounceHandler(c echo.Context) error {
 	emailSupport := viper.GetString("EMAIL_SUPPORT")
 	nameSupport := viper.GetString("NAME_SUPPORT")
 
-	if IsFromMailria(payload.Data.From) {
+	if utils.IsFromMailria(payload.Data.From) {
 		emailSupport = viper.GetString("EMAIL_MAILRIA_SUPPORT")
 		nameSupport = viper.GetString("NAME_MAILRIA_SUPPORT")
 	}
