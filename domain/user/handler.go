@@ -585,7 +585,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 
 	emailUser := viper.GetString("EMAIL_SUPPORT")
 	// Send email via pkg/aws
-	err = pkg.SendEmail(req.SendTo, emailUser, "Mailria Create Bulk User", emailBody.String(), nil)
+	err = pkg.SendEmailViaResend(emailUser, req.SendTo, "Mailria Create Bulk User", emailBody.String(), nil)
 	if err != nil {
 		fmt.Println("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
