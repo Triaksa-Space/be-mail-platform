@@ -27,6 +27,8 @@ func main() {
 		runServer()
 	case "sync":
 		runSync()
+	case "sync_sent":
+		runSyncSent()
 	default:
 		fmt.Println("Invalid command. Usage: go run cmd/main.go [server|sync]")
 		os.Exit(1)
@@ -51,6 +53,30 @@ func runServer() {
 
 	// Start the server
 	e.Logger.Fatal(e.Start(":8000"))
+}
+
+func runSyncSent() {
+	fmt.Println("init delete sync sent emails")
+
+	// Start the periodic task in a separate goroutine
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			// Call the SyncEmails function
+			fmt.Println("sync sent emails", time.Now())
+			err := email.SyncSentEmails()
+			if err != nil {
+				fmt.Println("Error syncing sent emails:", err)
+			}
+			fmt.Println("finish sync sent emails", time.Now())
+		}
+	}()
+
+	// Block the main goroutine to keep the application running
+	select {}
 }
 
 func runSync() {

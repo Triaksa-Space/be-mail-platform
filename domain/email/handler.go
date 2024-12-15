@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/jhillyerd/enmime"
 	"github.com/labstack/echo/v4"
@@ -1635,6 +1636,73 @@ func UploadAttachmentHandler(c echo.Context) error {
 // 	return nil
 // }
 
+func SyncSentEmails() error {
+	fmt.Println("Syncing sent emails...", time.Now())
+
+	// Define the SQL query to fetch sent emails
+	query := `
+        SELECT *
+		FROM emails
+		WHERE email_type = 'sent' 
+		AND timestamp <= NOW() - INTERVAL 7 DAY
+		ORDER BY id ASC;
+    `
+
+	var emails []Email
+	err := config.DB.Select(&emails, query)
+	if err != nil {
+		fmt.Println("Failed to fetch sent emails:", err)
+		return err
+	}
+
+	// Define the cutoff time (7 days ago)
+	cutoff := time.Now().AddDate(0, 0, -7)
+
+	// Initialize AWS S3 session
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(viper.GetString("AWS_REGION")),
+	})
+	if err != nil {
+		fmt.Println("Failed to create AWS session:", err)
+		return err
+	}
+
+	s3Client := s3.New(sess)
+	bucket := viper.GetString("AWS_S3_BUCKET")
+
+	for _, email := range emails {
+		if email.Timestamp.Before(cutoff) {
+			attachmentURLs, err := parseAttachments(email.Attachments)
+			if err != nil {
+				fmt.Printf("Failed to parse attachments for email %s: %v\n", email.EmailID, err)
+				continue
+			}
+
+			for _, url := range attachmentURLs {
+				key, err := extractS3KeyFromURL(url, bucket)
+				if err != nil {
+					fmt.Printf("Failed to extract S3 key from URL %s: %v\n", url, err)
+					continue
+				}
+
+				// Delete the object from S3
+				_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
+					Bucket: aws.String(bucket),
+					Key:    aws.String(key),
+				})
+				if err != nil {
+					fmt.Printf("Failed to delete S3 object %s: %v\n", key, err)
+				} else {
+					fmt.Printf("Deleted S3 object %s\n", key)
+				}
+			}
+		}
+	}
+
+	fmt.Println("Finished syncing sent emails", time.Now())
+	return nil
+}
+
 // OLD SYNC EMAILS
 func SyncEmails() error {
 	fmt.Println("Syncing emails...", time.Now())
@@ -2273,4 +2341,25 @@ func getUserByEmail(email string) (int, error) {
 		return 0, err
 	}
 	return userID, nil
+}
+
+// parseAttachments parses the attachments field into a slice of URLs
+// Assuming attachments are stored as a JSON array of strings
+func parseAttachments(attachments string) ([]string, error) {
+	var urls []string
+	err := json.Unmarshal([]byte(attachments), &urls)
+	if err != nil {
+		return nil, err
+	}
+	return urls, nil
+}
+
+// extractS3KeyFromURL extracts the S3 object key from the given URL
+func extractS3KeyFromURL(url, bucket string) (string, error) {
+	// Example URL: https://your-bucket.s3.amazonaws.com/path/to/object
+	prefix := fmt.Sprintf("https://%s.s3.amazonaws.com/", bucket)
+	if !strings.HasPrefix(url, prefix) {
+		return "", fmt.Errorf("URL does not match bucket prefix")
+	}
+	return strings.TrimPrefix(url, prefix), nil
 }
