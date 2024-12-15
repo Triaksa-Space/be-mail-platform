@@ -1639,13 +1639,13 @@ func UploadAttachmentHandler(c echo.Context) error {
 func SyncSentEmails() error {
 	fmt.Println("Syncing sent emails...", time.Now())
 
-	// Define the SQL query to fetch sent emails
+	// Define the SQL query to fetch sent emails older than 7 days
 	query := `
-        SELECT *
-		FROM emails
-		WHERE email_type = 'sent' 
-		AND timestamp <= NOW() - INTERVAL 7 DAY
-		ORDER BY id ASC;
+        SELECT id, attachments, timestamp
+        FROM emails
+        WHERE email_type = 'sent' 
+          AND timestamp <= NOW() - INTERVAL 7 DAY
+        ORDER BY id ASC;
     `
 
 	var emails []Email
@@ -1654,9 +1654,6 @@ func SyncSentEmails() error {
 		fmt.Println("Failed to fetch sent emails:", err)
 		return err
 	}
-
-	// Define the cutoff time (7 days ago)
-	cutoff := time.Now().AddDate(0, 0, -7)
 
 	// Initialize AWS S3 session
 	sess, err := session.NewSession(&aws.Config{
@@ -1671,31 +1668,49 @@ func SyncSentEmails() error {
 	bucket := viper.GetString("AWS_S3_BUCKET")
 
 	for _, email := range emails {
-		if email.Timestamp.Before(cutoff) {
-			attachmentURLs, err := parseAttachments(email.Attachments)
+		// Parse attachments
+		attachmentURLs, err := parseAttachments(email.Attachments)
+		if err != nil {
+			fmt.Printf("Failed to parse attachments for email ID %d: %v\n", email.ID, err)
+			continue
+		}
+
+		// Flag to determine if all attachments were deleted successfully
+		allDeleted := true
+
+		for _, url := range attachmentURLs {
+			key, err := extractS3KeyFromURL(url, bucket)
 			if err != nil {
-				fmt.Printf("Failed to parse attachments for email %s: %v\n", email.ID, err)
-				continue
+				fmt.Printf("Failed to extract S3 key from URL %s: %v\n", url, err)
+				allDeleted = false
+				break
 			}
 
-			for _, url := range attachmentURLs {
-				key, err := extractS3KeyFromURL(url, bucket)
-				if err != nil {
-					fmt.Printf("Failed to extract S3 key from URL %s: %v\n", url, err)
-					continue
-				}
-
-				// Delete the object from S3
-				_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
-					Bucket: aws.String(bucket),
-					Key:    aws.String(key),
-				})
-				if err != nil {
-					fmt.Printf("Failed to delete S3 object %s: %v\n", key, err)
-				} else {
-					fmt.Printf("Deleted S3 object %s\n", key)
-				}
+			// Delete the object from S3
+			_, err = s3Client.DeleteObject(&s3.DeleteObjectInput{
+				Bucket: aws.String(bucket),
+				Key:    aws.String(key),
+			})
+			if err != nil {
+				fmt.Printf("Failed to delete S3 object %s: %v\n", key, err)
+				allDeleted = false
+				break
+			} else {
+				fmt.Printf("Deleted S3 object %s\n", key)
 			}
+		}
+
+		// If all attachments are deleted successfully, delete the email record
+		if allDeleted {
+			delQuery := `DELETE FROM emails WHERE id = ?`
+			_, err := config.DB.Exec(delQuery, email.ID)
+			if err != nil {
+				fmt.Printf("Failed to delete email record ID %d: %v\n", email.ID, err)
+			} else {
+				fmt.Printf("Deleted email record ID %d from database\n", email.ID)
+			}
+		} else {
+			fmt.Printf("Skipping deletion of email record ID %d due to attachment deletion failure\n", email.ID)
 		}
 	}
 
