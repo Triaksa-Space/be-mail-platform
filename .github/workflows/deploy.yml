@@ -55,7 +55,10 @@ jobs:
         echo "SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}" >> .env
         echo "EMAIL_SUPPORT=${{ secrets.EMAIL_SUPPORT }}" >> .env
         echo "NAME_SUPPORT=${{ secrets.NAME_SUPPORT }}" >> .env
+        echo "EMAIL_MAILRIA_SUPPORT=${{ secrets.EMAIL_MAILRIA_SUPPORT }}" >> .env
+        echo "NAME_MAILRIA_SUPPORT=${{ secrets.NAME_MAILRIA_SUPPORT }}" >> .env
         echo "RESEND_API=${{ secrets.RESEND_API }}" >> .env
+        echo "RESEND_MAILRIA_API=${{ secrets.RESEND_MAILRIA_API }}" >> .env
         
         echo "✅ Environment file created"
 
