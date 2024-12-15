@@ -1674,7 +1674,7 @@ func SyncSentEmails() error {
 		if email.Timestamp.Before(cutoff) {
 			attachmentURLs, err := parseAttachments(email.Attachments)
 			if err != nil {
-				fmt.Printf("Failed to parse attachments for email %s: %v\n", email.EmailID, err)
+				fmt.Printf("Failed to parse attachments for email %s: %v\n", email.ID, err)
 				continue
 			}
 
