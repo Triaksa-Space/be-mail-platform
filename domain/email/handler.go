@@ -1843,7 +1843,28 @@ func storeRawEmail(s3Client *s3.S3, messageID string, emailContent []byte) error
 	    ) VALUES (?, ?, ?, NOW(), false, ?)
 	`, sendEmailTo, messageID, emailContent, dateEmail)
 	if err != nil {
-		return fmt.Errorf("failed to insert raw email: %v", err)
+		fmt.Println("ERROR INSERT RAW EMAIL", err)
+
+		if strings.Contains(err.Error(), "Incorrect datetime value") {
+			fmt.Println("Error Incorrect datetime value", sendEmailTo)
+			// Set dateEmail to today's date if there's an error
+			dateEmail = time.Now()
+			_, err = config.DB.Exec(`
+                INSERT INTO incoming_emails (
+                    email_send_to,
+                    message_id,
+                    email_data,
+                    created_at,
+                    processed,
+                    email_date
+                ) VALUES (?, ?, ?, NOW(), false, ?)
+            `, sendEmailTo, messageID, emailContent, dateEmail)
+			if err != nil {
+				return fmt.Errorf("failed to insert raw email: %v", err)
+			}
+		} else {
+			return fmt.Errorf("failed to insert raw email: %v", err)
+		}
 	}
 	// err = processIncomingEmails(sendEmailTo)
 	// fmt.Println("Err Process Incoming Emails", err)
