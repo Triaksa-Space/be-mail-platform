@@ -1860,10 +1860,10 @@ func storeRawEmail(s3Client *s3.S3, messageID string, emailContent []byte) error
                 ) VALUES (?, ?, ?, NOW(), false, ?)
             `, sendEmailTo, messageID, emailContent, dateEmail)
 			if err != nil {
-				return fmt.Errorf("failed to insert raw email: %v", err)
+				return fmt.Errorf("storeRawEmail: failed to insert raw email: %v", err)
 			}
 		} else {
-			return fmt.Errorf("failed to insert raw email: %v", err)
+			return fmt.Errorf("storeRawEmail: failed to insert raw email: %v", err)
 		}
 	}
 	// err = processIncomingEmails(sendEmailTo)
@@ -2199,6 +2199,9 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 		}
 
 		dateT, _ := env.Date()
+		if dateT == (time.Time{}) {
+			dateT = time.Now()
+		}
 
 		// Extract email information
 		email := &PEmail{
@@ -2276,7 +2279,7 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 			email.Date,
 		)
 		if err != nil {
-			fmt.Printf("Failed to insert email %s into DB: %v\n", email.ID, err)
+			fmt.Printf("processIncomingEmails: Failed to insert email %s into DB: %v\n", email.ID, err)
 			continue
 		}
 
