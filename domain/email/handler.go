@@ -1893,7 +1893,7 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 					recipient := strings.TrimSpace(parts[1])
 					recipient = strings.TrimSuffix(recipient, ";")
 					fmt.Println("Received for recipient", recipient)
-					// return recipient, dateT, nil
+					return recipient, dateT, nil
 				}
 			}
 		}
