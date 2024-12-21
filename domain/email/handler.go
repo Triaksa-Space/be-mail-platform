@@ -1895,6 +1895,8 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 					if len(recipientParts) > 1 {
 						recipient := strings.TrimSpace(recipientParts[0])
 						dateStr := strings.TrimSpace(recipientParts[1])
+						// Remove extra text " (UTC)" if present
+						dateStr = strings.TrimSuffix(dateStr, " (UTC)")
 						dateT, err := time.Parse(time.RFC1123Z, dateStr)
 						if err != nil {
 							fmt.Println("Failed to parse date:", err)
