@@ -1881,17 +1881,17 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 
 	dateT, _ := env.Date()
 
-	toAddresses := parseAddresses(env.GetHeader("To"))
-	if len(toAddresses) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse TO")
-		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
-	}
-
 	toFrom := parseAddresses(env.GetHeader("From"))
 	if len(toFrom) == 0 {
 		fmt.Println("extractRecipientEmail - Failed to parse FROM")
 	} else {
 		fmt.Println("extractRecipientEmail - FROM", toFrom)
+	}
+
+	toAddresses := parseAddresses(env.GetHeader("To"))
+	if len(toAddresses) == 0 {
+		fmt.Println("extractRecipientEmail - Failed to parse TO")
+		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
 	}
 
 	return toAddresses[0].Address, dateT, nil
