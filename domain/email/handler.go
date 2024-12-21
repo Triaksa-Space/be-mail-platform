@@ -1881,6 +1881,18 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 
 	dateT, _ := env.Date()
 
+	toAddresses := parseAddresses(env.GetHeader("To"))
+	if len(toAddresses) == 0 {
+		fmt.Println("extractRecipientEmail - Failed to parse TO - TRY Extract non mime")
+		address, dateT, err := extractRecipientEmailNonMIME(emailContent)
+		if err != nil {
+			fmt.Println("GET FROM NON MIME ERROR", err)
+		}
+		fmt.Println("GET FROM NON MIME ADDRESS", address)
+		fmt.Println("GET FROM NON MIME DATE T", dateT)
+		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+	}
+
 	toFrom := parseAddresses(env.GetHeader("From"))
 	if len(toFrom) == 0 {
 		fmt.Println("extractRecipientEmail - Failed to parse FROM")
@@ -1888,27 +1900,57 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 		fmt.Println("extractRecipientEmail - FROM", toFrom)
 	}
 
-	toAddresses := parseAddresses(env.GetHeader("To"))
-	if len(toAddresses) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse TO - TRY Cc or Bcc")
-		// If "From" is empty, try "Sender"
-		toAddresses = parseAddresses(env.GetHeader("Cc"))
-		if len(toAddresses) == 0 {
-			fmt.Println("extractRecipientEmail - Failed to parse FROM and SENDER")
-			// If "Sender" is also empty, try "Reply-To"
-			toAddresses = parseAddresses(env.GetHeader("Bcc"))
-			if len(toAddresses) == 0 {
-				fmt.Println("extractRecipientEmail - Failed to parse To, Cc, and Bcc")
-			} else {
-				fmt.Println("extractRecipientEmail - Bcc", toAddresses)
+	return toAddresses[0].Address, dateT, nil
+}
+
+func extractRecipientEmailNonMIME(emailContent []byte) (string, time.Time, error) {
+	// Implement logic to handle non-MIME email
+	// For example, you can parse the email content manually to extract headers
+	// This is a simplified example and may need to be adjusted based on your requirements
+
+	emailStr := string(emailContent)
+	headers := parseHeaders(emailStr)
+
+	dateT, err := time.Parse(time.RFC1123Z, headers["Date"])
+	if err != nil {
+		dateT = time.Time{}
+	}
+
+	toFrom := parseAddresses(headers["From"])
+	if len(toFrom) == 0 {
+		toFrom = parseAddresses(headers["Sender"])
+		if len(toFrom) == 0 {
+			toFrom = parseAddresses(headers["Reply-To"])
+			if len(toFrom) == 0 {
+				return "", time.Time{}, fmt.Errorf("failed to parse sender addresses")
 			}
-		} else {
-			fmt.Println("extractRecipientEmail - To", toAddresses)
 		}
-		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+	}
+
+	toAddresses := parseAddresses(headers["To"])
+	if len(toAddresses) == 0 {
+		toAddresses = parseAddresses(headers["Cc"])
+		if len(toAddresses) == 0 {
+			toAddresses = parseAddresses(headers["Bcc"])
+			if len(toAddresses) == 0 {
+				return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+			}
+		}
 	}
 
 	return toAddresses[0].Address, dateT, nil
+}
+
+func parseHeaders(emailStr string) map[string]string {
+	headers := make(map[string]string)
+	lines := strings.Split(emailStr, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, ":") {
+			parts := strings.SplitN(line, ": ", 2)
+			headers[parts[0]] = parts[1]
+		}
+	}
+	return headers
 }
 
 func SyncBucketInboxHandler(c echo.Context) error {
