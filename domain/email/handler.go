@@ -1883,7 +1883,20 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 
 	toFrom := parseAddresses(env.GetHeader("From"))
 	if len(toFrom) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse FROM")
+		fmt.Println("extractRecipientEmail - Failed to parse FROM - Try Sender and Reply-To")
+		// If "From" is empty, try "Sender"
+		toFrom = parseAddresses(env.GetHeader("Sender"))
+		if len(toFrom) == 0 {
+			// If "Sender" is also empty, try "Reply-To"
+			toFrom = parseAddresses(env.GetHeader("Reply-To"))
+			if len(toFrom) == 0 {
+				fmt.Println("extractRecipientEmail - Failed to parse FROM, SENDER, and REPLY-TO")
+			} else {
+				fmt.Println("extractRecipientEmail - REPLY-TO", toFrom)
+			}
+		} else {
+			fmt.Println("extractRecipientEmail - SENDER", toFrom)
+		}
 	} else {
 		fmt.Println("extractRecipientEmail - FROM", toFrom)
 	}
