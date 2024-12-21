@@ -1890,20 +1890,20 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 
 	toAddresses := parseAddresses(env.GetHeader("To"))
 	if len(toAddresses) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse TO - TRY SENDER OR REPLY-TO")
+		fmt.Println("extractRecipientEmail - Failed to parse TO - TRY Cc or Bcc")
 		// If "From" is empty, try "Sender"
-		toAddresses = parseAddresses(env.GetHeader("Sender"))
+		toAddresses = parseAddresses(env.GetHeader("Cc"))
 		if len(toAddresses) == 0 {
 			fmt.Println("extractRecipientEmail - Failed to parse FROM and SENDER")
 			// If "Sender" is also empty, try "Reply-To"
-			toAddresses = parseAddresses(env.GetHeader("Reply-To"))
+			toAddresses = parseAddresses(env.GetHeader("Bcc"))
 			if len(toAddresses) == 0 {
-				fmt.Println("extractRecipientEmail - Failed to parse FROM, SENDER, and REPLY-TO")
+				fmt.Println("extractRecipientEmail - Failed to parse To, Cc, and Bcc")
 			} else {
-				fmt.Println("extractRecipientEmail - REPLY-TO", toAddresses)
+				fmt.Println("extractRecipientEmail - Bcc", toAddresses)
 			}
 		} else {
-			fmt.Println("extractRecipientEmail - SENDER", toAddresses)
+			fmt.Println("extractRecipientEmail - To", toAddresses)
 		}
 		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
 	}
