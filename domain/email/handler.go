@@ -1883,27 +1883,28 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 
 	toFrom := parseAddresses(env.GetHeader("From"))
 	if len(toFrom) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse FROM - Try Sender and Reply-To")
-		// If "From" is empty, try "Sender"
-		toFrom = parseAddresses(env.GetHeader("Sender"))
-		if len(toFrom) == 0 {
-			// If "Sender" is also empty, try "Reply-To"
-			toFrom = parseAddresses(env.GetHeader("Reply-To"))
-			if len(toFrom) == 0 {
-				fmt.Println("extractRecipientEmail - Failed to parse FROM, SENDER, and REPLY-TO")
-			} else {
-				fmt.Println("extractRecipientEmail - REPLY-TO", toFrom)
-			}
-		} else {
-			fmt.Println("extractRecipientEmail - SENDER", toFrom)
-		}
+		fmt.Println("extractRecipientEmail - Failed to parse FROM")
 	} else {
 		fmt.Println("extractRecipientEmail - FROM", toFrom)
 	}
 
 	toAddresses := parseAddresses(env.GetHeader("To"))
 	if len(toAddresses) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse TO")
+		fmt.Println("extractRecipientEmail - Failed to parse TO - TRY SENDER OR REPLY-TO")
+		// If "From" is empty, try "Sender"
+		toAddresses = parseAddresses(env.GetHeader("Sender"))
+		if len(toAddresses) == 0 {
+			fmt.Println("extractRecipientEmail - Failed to parse FROM and SENDER")
+			// If "Sender" is also empty, try "Reply-To"
+			toAddresses = parseAddresses(env.GetHeader("Reply-To"))
+			if len(toAddresses) == 0 {
+				fmt.Println("extractRecipientEmail - Failed to parse FROM, SENDER, and REPLY-TO")
+			} else {
+				fmt.Println("extractRecipientEmail - REPLY-TO", toAddresses)
+			}
+		} else {
+			fmt.Println("extractRecipientEmail - SENDER", toAddresses)
+		}
 		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
 	}
 
