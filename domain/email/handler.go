@@ -1910,35 +1910,36 @@ func extractRecipientEmailNonMIME(emailContent []byte) (string, time.Time, error
 
 	emailStr := string(emailContent)
 	headers := parseHeaders(emailStr)
+	fmt.Println("headers", headers)
 
-	dateT, err := time.Parse(time.RFC1123Z, headers["Date"])
-	if err != nil {
-		dateT = time.Time{}
-	}
+	// dateT, err := time.Parse(time.RFC1123Z, headers["Date"])
+	// if err != nil {
+	// 	dateT = time.Time{}
+	// }
 
-	toFrom := parseAddresses(headers["From"])
-	if len(toFrom) == 0 {
-		toFrom = parseAddresses(headers["Sender"])
-		if len(toFrom) == 0 {
-			toFrom = parseAddresses(headers["Reply-To"])
-			if len(toFrom) == 0 {
-				return "", time.Time{}, fmt.Errorf("failed to parse sender addresses")
-			}
-		}
-	}
+	// toFrom := parseAddresses(headers["From"])
+	// if len(toFrom) == 0 {
+	// 	toFrom = parseAddresses(headers["Sender"])
+	// 	if len(toFrom) == 0 {
+	// 		toFrom = parseAddresses(headers["Reply-To"])
+	// 		if len(toFrom) == 0 {
+	// 			return "", time.Time{}, fmt.Errorf("failed to parse sender addresses")
+	// 		}
+	// 	}
+	// }
 
-	toAddresses := parseAddresses(headers["To"])
-	if len(toAddresses) == 0 {
-		toAddresses = parseAddresses(headers["Cc"])
-		if len(toAddresses) == 0 {
-			toAddresses = parseAddresses(headers["Bcc"])
-			if len(toAddresses) == 0 {
-				return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
-			}
-		}
-	}
+	// toAddresses := parseAddresses(headers["To"])
+	// if len(toAddresses) == 0 {
+	// 	toAddresses = parseAddresses(headers["Cc"])
+	// 	if len(toAddresses) == 0 {
+	// 		toAddresses = parseAddresses(headers["Bcc"])
+	// 		if len(toAddresses) == 0 {
+	// 			return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+	// 		}
+	// 	}
+	// }
 
-	return toAddresses[0].Address, dateT, nil
+	return "", time.Time{}, nil
 }
 
 func parseHeaders(emailStr string) map[string]string {
