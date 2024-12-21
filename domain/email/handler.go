@@ -1890,10 +1890,19 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 			if strings.Contains(receivedHeader, "for ") {
 				parts := strings.Split(receivedHeader, "for ")
 				if len(parts) > 1 {
-					recipient := strings.TrimSpace(parts[1])
-					recipient = strings.TrimSuffix(recipient, ";")
-					fmt.Println("Received for recipient", recipient)
-					return recipient, dateT, nil
+					recipientPart := strings.TrimSpace(parts[1])
+					recipientParts := strings.SplitN(recipientPart, ";", 2)
+					if len(recipientParts) > 1 {
+						recipient := strings.TrimSpace(recipientParts[0])
+						dateStr := strings.TrimSpace(recipientParts[1])
+						dateT, err := time.Parse(time.RFC1123Z, dateStr)
+						if err != nil {
+							fmt.Println("Failed to parse date:", err)
+							return "", time.Time{}, fmt.Errorf("failed to parse date: %v", err)
+						}
+						fmt.Println("Received for recipient", recipient)
+						return recipient, dateT, nil
+					}
 				}
 			}
 		}
