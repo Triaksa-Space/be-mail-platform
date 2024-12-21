@@ -1881,10 +1881,26 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 
 	dateT, _ := env.Date()
 
+	// Try to get the "To" address
 	toAddresses := parseAddresses(env.GetHeader("To"))
-	if len(toAddresses) == 0 {
-		fmt.Println("extractRecipientEmail - Failed to parse TO")
+	if len(toAddresses) == 0 || (len(toAddresses) == 1 && toAddresses[0].Address == "Undisclosed recipients") {
+		// If "To" is empty or contains "Undisclosed recipients", try to extract from "Received" headers
+		receivedHeaders := env.GetHeaderValues("Received")
+		for _, receivedHeader := range receivedHeaders {
+			if strings.Contains(receivedHeader, "for ") {
+				parts := strings.Split(receivedHeader, "for ")
+				if len(parts) > 1 {
+					recipient := strings.TrimSpace(parts[1])
+					recipient = strings.TrimSuffix(recipient, ";")
+					fmt.Println("Received for recipient", recipient)
+					// return recipient, dateT, nil
+				}
+			}
+		}
+		fmt.Println("extractRecipientEmail - Failed to parse TO and Received headers")
 		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+	} else {
+		fmt.Println("extractRecipientEmail - TO", toAddresses)
 	}
 
 	toFrom := parseAddresses(env.GetHeader("From"))
