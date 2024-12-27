@@ -451,15 +451,17 @@ func BulkCreateUserHandler(c echo.Context) error {
 		// Load names from CSV file
 		file, err := os.Open("names.csv")
 		if err != nil {
-			fmt.Println("Failed to open names.csv", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to open names.csv"})
-		}
-		defer file.Close()
+			fmt.Println("Failed to open names.csv, using default list", err)
+			names = ListOfNames
+		} else {
+			defer file.Close()
 
-		reader := csv.NewReader(file)
-		names, err = reader.ReadAll()
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
+			reader := csv.NewReader(file)
+			names, err = reader.ReadAll()
+			if err != nil {
+				fmt.Println("Failed to readAll names.csv", err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
+			}
 		}
 
 		// Shuffle the names to ensure randomness
