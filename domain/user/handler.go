@@ -793,12 +793,31 @@ func ListUsersHandler(c echo.Context) error {
 	if err != nil || pageSize < 1 {
 		pageSize = 10 // Default page size
 	}
-	searchEmail := c.QueryParam("email")
 
+	// Sanitize and validate email search parameter
+	searchEmail := strings.TrimSpace(c.QueryParam("email"))
+	if len(searchEmail) > 255 { // Add length limit
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Email search parameter too long"})
+	}
+
+	// Validate sort fields to prevent SQL injection
 	// Get sorting parameters
 	sortFields := c.QueryParam("sort_fields")
 	if sortFields == "" {
 		sortFields = "last_login desc" // Default sort field
+	}
+
+	allowedSortFields := map[string]bool{
+		"last_login desc": true,
+		"last_login asc":  true,
+		"email desc":      true,
+		"email asc":       true,
+		"created_at desc": true,
+		"created_at asc":  true,
+		// Add other allowed sort fields
+	}
+	if !allowedSortFields[sortFields] {
+		sortFields = "last_login desc" // Default safe value
 	}
 
 	// Calculate offset
