@@ -38,6 +38,29 @@ func main() {
 func runServer() {
 	e := echo.New()
 
+	// Hide server information
+	e.HideBanner = true
+	e.HidePort = true
+
+	// Security middleware
+	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
+		XSSProtection:         "1; mode=block",
+		ContentTypeNosniff:    "nosniff",
+		XFrameOptions:         "SAMEORIGIN",
+		HSTSMaxAge:            3600,
+		ContentSecurityPolicy: "default-src 'self'",
+	}))
+
+	// Custom HTTP headers middleware
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// Remove or replace default headers
+			c.Response().Header().Set("Server", "")
+			c.Response().Header().Set("X-Powered-By", "")
+			return next(c)
+		}
+	})
+
 	// Middleware and CORS configuration
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     []string{"*"},
