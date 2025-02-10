@@ -102,6 +102,7 @@ func LoginHandler(c echo.Context) error {
 	var user User
 	err = config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
 	if err != nil {
+		fmt.Println("Error fetching user:", err)
 		if err == sql.ErrNoRows {
 			// User not found or password mismatch: increment failed attempts
 			attempts.FailedAttempts++
@@ -288,22 +289,62 @@ func ChangePasswordHandler(c echo.Context) error {
 	}
 
 	// Fetch user data from the database
-	var hashedPassword string
-	err := config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
+	var user struct {
+		HashedPassword string     `db:"password"`
+		FailedAttempts int        `db:"failed_attempts"`
+		LastFailedAt   *time.Time `db:"last_failed_at"`
+	}
+
+	err := config.DB.Get(&user, `
+        SELECT password, failed_attempts, last_failed_at 
+        FROM users WHERE id = ?`, req.UserID)
 	if err != nil {
-		fmt.Println("error fetch user data", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	maxAttempts := 5
+	blockDuration := time.Hour
+	// Check if account is temporarily blocked
+	if user.FailedAttempts >= maxAttempts && user.LastFailedAt != nil {
+		if time.Since(*user.LastFailedAt) < blockDuration {
+			return c.JSON(http.StatusTooManyRequests, map[string]string{
+				"error": "Account is temporarily locked. Please try again later.",
+			})
+		} else {
+			// Reset failed attempts if blocking period has passed
+			_, err = config.DB.Exec(`
+                UPDATE users 
+                SET failed_attempts = 0, 
+                    last_failed_at = NULL 
+                WHERE id = ?`, req.UserID)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
+			user.FailedAttempts = 0
+			user.LastFailedAt = nil
+		}
 	}
 
 	if req.OldPassword != "" {
 		// Check if the old password is correct
-		if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
+		if !utils.CheckPasswordHash(req.OldPassword, user.HashedPassword) {
 			fmt.Println("error CheckPasswordHash", err)
+
+			// Increment failed attempts
+			_, err = config.DB.Exec(`
+                UPDATE users 
+                SET failed_attempts = failed_attempts + 1, 
+                    last_failed_at = NOW() 
+                WHERE id = ?`, req.UserID)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
+
 			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
 		}
 
 		// Check if the new password is the same as the old password
-		if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
+		if utils.CheckPasswordHash(req.NewPassword, user.HashedPassword) {
 			fmt.Println("error CheckPasswordHash", err)
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
 		}
@@ -316,11 +357,16 @@ func ChangePasswordHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	// Update the user's password in the database
-	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, req.UserID)
+	// Update the user's password and reset failed attempts
+	_, err = config.DB.Exec(`
+        UPDATE users 
+        SET password = ?, 
+            failed_attempts = 0, 
+            last_failed_at = NULL,
+            updated_at = NOW() 
+        WHERE id = ?`, newHashedPassword, req.UserID)
 	if err != nil {
-		fmt.Println("error update password", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	// Update last login

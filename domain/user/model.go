@@ -3,20 +3,22 @@ package user
 import "time"
 
 type User struct {
-	UserEncodeID  string     `json:"user_encode_id"` // User Encoded ID
-	ID            int64      `db:"id"`
-	Email         string     `db:"email"`
-	Password      string     `db:"password"`
-	RoleID        int        `db:"role_id"`
-	LastLogin     *time.Time `db:"last_login"`
-	SentEmails    int        `db:"sent_emails"`
-	LastEmailTime *time.Time `db:"last_email_time"`
-	CreatedBy     int64      `db:"created_by"`
-	UpdatedBy     *int       `db:"updated_by"`
-	CreatedByName string     `db:"created_by_name"`
-	UpdatedByName string     `db:"updated_by_name"`
-	CreatedAt     time.Time  `db:"created_at"`
-	UpdatedAt     time.Time  `db:"updated_at"`
+	UserEncodeID   string     `json:"user_encode_id"` // User Encoded ID
+	ID             int64      `db:"id"`
+	Email          string     `db:"email"`
+	Password       string     `db:"password"`
+	RoleID         int        `db:"role_id"`
+	LastLogin      *time.Time `db:"last_login"`
+	SentEmails     int        `db:"sent_emails"`
+	LastEmailTime  *time.Time `db:"last_email_time"`
+	FailedAttempts int        `db:"failed_attempts"`
+	LastFailedAt   *time.Time `db:"last_failed_at"`
+	CreatedBy      int64      `db:"created_by"`
+	UpdatedBy      *int       `db:"updated_by"`
+	CreatedByName  string     `db:"created_by_name"`
+	UpdatedByName  string     `db:"updated_by_name"`
+	CreatedAt      time.Time  `db:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"`
 }
 
 type ChangePasswordRequest struct {
