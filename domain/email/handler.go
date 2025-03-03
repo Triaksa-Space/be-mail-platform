@@ -2110,8 +2110,8 @@ func parseAddresses(addresses string) []EmailAddress {
 }
 
 func sanitizeText(s string) string {
-	// Remove zero-width and other invisible characters
-	s = regexp.MustCompile(`[\u200B-\u200D\uFEFF]`).ReplaceAllString(s, "")
+	// Remove zero-width and other invisible characters using Unicode ranges
+	s = regexp.MustCompile(`[\x{200B}-\x{200D}\x{FEFF}]`).ReplaceAllString(s, "")
 
 	// Remove emojis and other special characters
 	s = regexp.MustCompile(`[\x{1F300}-\x{1F6FF}]`).ReplaceAllString(s, "")
