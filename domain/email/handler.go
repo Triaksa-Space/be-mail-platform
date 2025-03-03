@@ -2313,6 +2313,17 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 		}
 		preview := generatePreview(email.TextBody, email.HTMLBody)
 		fmt.Println("preview", preview)
+		fmt.Println("email.From", email.From)
+
+		// Extract email information
+		fromAddresses := parseAddresses(env.GetHeader("From"))
+		if len(fromAddresses) == 0 {
+			// Handle case where From is empty
+			fromAddresses = append(fromAddresses, EmailAddress{
+				Name:    "Unknown Sender",
+				Address: "no-reply@example.com",
+			})
+		}
 
 		// Get the user ID from the email address
 		var userID int64
