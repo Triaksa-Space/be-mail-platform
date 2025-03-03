@@ -2109,21 +2109,61 @@ func parseAddresses(addresses string) []EmailAddress {
 	return result
 }
 
+func sanitizeText(s string) string {
+	// Remove zero-width and other invisible characters
+	s = regexp.MustCompile(`[\u200B-\u200D\uFEFF]`).ReplaceAllString(s, "")
+
+	// Remove emojis and other special characters
+	s = regexp.MustCompile(`[\x{1F300}-\x{1F6FF}]`).ReplaceAllString(s, "")
+
+	// Only keep printable ASCII characters
+	var result strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) && r < 128 {
+			result.WriteRune(r)
+		}
+	}
+
+	return strings.TrimSpace(result.String())
+}
+
 func generatePreview(plainText string, htmlBody string) string {
 	var text string
-	// fmt.Println("plainText", plainText)
 	if plainText != "" {
 		text = html2text(plainText)
 	} else {
-		// Convert HTML to plain text
 		text = html2text(htmlBody)
 	}
-	// Generate a short preview
-	if len(text) > 200 {
-		return text[:200] + "..."
+
+	// Sanitize and normalize the text
+	text = sanitizeText(text)
+
+	// Generate a safe preview length
+	runeCount := 0
+	for i := range text {
+		if runeCount >= 200 {
+			return text[:i] + "..."
+		}
+		runeCount++
 	}
 	return text
 }
+
+// func generatePreview(plainText string, htmlBody string) string {
+// 	var text string
+// 	// fmt.Println("plainText", plainText)
+// 	if plainText != "" {
+// 		text = html2text(plainText)
+// 	} else {
+// 		// Convert HTML to plain text
+// 		text = html2text(htmlBody)
+// 	}
+// 	// Generate a short preview
+// 	if len(text) > 200 {
+// 		return text[:200] + "..."
+// 	}
+// 	return text
+// }
 
 // // Simple HTML to text converter (you might want to use a proper library)
 func html2text(contentHTML string) string {
