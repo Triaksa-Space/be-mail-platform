@@ -2354,8 +2354,8 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
         `,
 			userID,
-			email.From[0].Address,
-			email.From[0].Name,
+			fromAddresses[0].Address,
+			fromAddresses[0].Name,
 			email.Subject,
 			preview,
 			bodyEmail,
