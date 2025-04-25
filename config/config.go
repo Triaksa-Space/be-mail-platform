@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -19,6 +20,12 @@ func InitDB() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	log.Println("Connected to the database")
+
+	// Configure connection pool settings
+	DB.SetMaxOpenConns(10)           // Limit maximum open connections
+	DB.SetMaxIdleConns(5)            // Set the maximum number of idle connections
+	DB.SetConnMaxLifetime(time.Hour) // Set max connection lifetime
+	log.Println("Database connection pool configured")
 }
 
 func InitConfig() {
