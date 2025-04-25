@@ -25,6 +25,7 @@ func InitDB() {
 	DB.SetMaxOpenConns(10)           // Limit maximum open connections
 	DB.SetMaxIdleConns(5)            // Set the maximum number of idle connections
 	DB.SetConnMaxLifetime(time.Hour) // Set max connection lifetime
+
 	log.Println("Database connection pool configured")
 }
 
