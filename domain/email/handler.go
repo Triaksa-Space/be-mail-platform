@@ -2488,3 +2488,131 @@ func extractS3KeyFromURL(url, bucket string) (string, error) {
 	}
 	return strings.TrimPrefix(url, prefix), nil
 }
+
+// GetUserSentEmailsHandler returns the current user's sent emails
+func GetUserSentEmailsHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+
+	// Pagination
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	// Search filter
+	search := c.QueryParam("search")
+
+	// Build query
+	var args []interface{}
+	whereClause := "user_id = ?"
+	args = append(args, userID)
+
+	if search != "" {
+		whereClause += " AND (to_email LIKE ? OR subject LIKE ?)"
+		searchPattern := "%" + search + "%"
+		args = append(args, searchPattern, searchPattern)
+	}
+
+	// Get total count
+	var total int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM sent_emails WHERE %s", whereClause)
+	err := config.DB.Get(&total, countQuery, args...)
+	if err != nil {
+		fmt.Println("Error counting sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Get sent emails
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`
+		SELECT id, user_id, from_email, to_email, subject, body_preview, status, sent_at, created_at,
+		       CASE WHEN attachments IS NOT NULL AND attachments != '' AND attachments != '[]' THEN 1 ELSE 0 END as has_attachments
+		FROM sent_emails
+		WHERE %s
+		ORDER BY COALESCE(sent_at, created_at) DESC
+		LIMIT ? OFFSET ?
+	`, whereClause)
+
+	type SentEmailRow struct {
+		ID             int64      `db:"id"`
+		UserID         int64      `db:"user_id"`
+		FromEmail      string     `db:"from_email"`
+		ToEmail        string     `db:"to_email"`
+		Subject        string     `db:"subject"`
+		BodyPreview    *string    `db:"body_preview"`
+		Status         string     `db:"status"`
+		SentAt         *time.Time `db:"sent_at"`
+		CreatedAt      time.Time  `db:"created_at"`
+		HasAttachments int        `db:"has_attachments"`
+	}
+
+	var emails []SentEmailRow
+	err = config.DB.Select(&emails, query, args...)
+	if err != nil {
+		fmt.Println("Error fetching sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Build response
+	data := make([]SentEmail, 0)
+	for _, e := range emails {
+		bodyPreview := ""
+		if e.BodyPreview != nil {
+			bodyPreview = *e.BodyPreview
+		}
+		data = append(data, SentEmail{
+			ID:             utils.EncodeID(int(e.ID)),
+			FromEmail:      e.FromEmail,
+			ToEmail:        e.ToEmail,
+			Subject:        e.Subject,
+			BodyPreview:    bodyPreview,
+			Status:         e.Status,
+			SentAt:         e.SentAt,
+			CreatedAt:      e.CreatedAt,
+			HasAttachments: e.HasAttachments == 1,
+		})
+	}
+
+	totalPages := (total + limit - 1) / limit
+
+	return c.JSON(http.StatusOK, UserSentEmailsResponse{
+		Data: data,
+		Pagination: PaginationResponse{
+			Page:       page,
+			Limit:      limit,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	})
+}
+
+// SaveSentEmail saves a sent email to the sent_emails table
+func SaveSentEmail(userID int64, fromEmail, toEmail, subject, body string, attachments []string, provider, providerMsgID, status string) error {
+	// Create preview
+	bodyPreview := body
+	if len(bodyPreview) > 500 {
+		bodyPreview = bodyPreview[:500]
+	}
+
+	// Convert attachments to JSON
+	var attachmentsJSON *string
+	if len(attachments) > 0 {
+		jsonBytes, err := json.Marshal(attachments)
+		if err == nil {
+			str := string(jsonBytes)
+			attachmentsJSON = &str
+		}
+	}
+
+	_, err := config.DB.Exec(`
+		INSERT INTO sent_emails (user_id, from_email, to_email, subject, body_preview, body, attachments, provider, provider_message_id, status, sent_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+	`, userID, fromEmail, toEmail, subject, bodyPreview, body, attachmentsJSON, provider, providerMsgID, status)
+
+	return err
+}
