@@ -48,16 +48,16 @@ func RegisterRoutes(e *echo.Echo) {
 	userGroup.PUT("/change_password", user.ChangePasswordHandler)
 	userGroup.PUT("/change_password/admin", user.ChangePasswordAdminHandler, middleware.RoleMiddleware(superAdminOnly))
 	userGroup.PUT("/binding-email", user.SetBindingEmailHandler) // User sets their binding email
-	userGroup.POST("/", user.CreateUserHandler, middleware.RoleMiddleware(adminRoles))
+	userGroup.POST("/", user.CreateUserHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("create_single"))
 	userGroup.POST("/admin", user.CreateUserAdminHandler, middleware.RoleMiddleware(superAdminOnly))
-	userGroup.POST("/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(adminRoles))
-	userGroup.POST("/bulk/v2", user.BulkCreateUserV2Handler, middleware.RoleMiddleware(adminRoles)) // New version with password generation
+	userGroup.POST("/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("create_bulk"))
+	userGroup.POST("/bulk/v2", user.BulkCreateUserV2Handler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("create_bulk"))
 	userGroup.GET("/get_user_me", user.GetUserMeHandler)                                            // Must be before /:id
-	userGroup.GET("/", user.ListUsersHandler, middleware.RoleMiddleware(adminRoles))
+	userGroup.GET("/", user.ListUsersHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("user_list"))
 	userGroup.GET("/admin", user.ListAdminUsersHandler, middleware.RoleMiddleware(superAdminOnly))
-	userGroup.GET("/:id", user.GetUserHandler, middleware.RoleMiddleware(adminRoles)) // Parameterized route last
+	userGroup.GET("/:id", user.GetUserHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("user_list")) // Parameterized route last
 	userGroup.DELETE("/admin/:id", user.DeleteUserAdminHandler, middleware.RoleMiddleware(superAdminOnly))
-	userGroup.DELETE("/:id", user.DeleteUserHandler, middleware.RoleMiddleware(adminRoles))
+	userGroup.DELETE("/:id", user.DeleteUserHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("user_list"))
 
 	// Email routes
 	emailGroup := e.Group("/email", middleware.JWTMiddleware)
@@ -83,15 +83,15 @@ func RegisterRoutes(e *echo.Echo) {
 	adminGroup := e.Group("/admin", middleware.JWTMiddleware)
 	adminGroup.Use(middleware.RoleMiddleware(adminRoles))
 
-	// Admin content management
+	// Admin content management (permission checked in handler based on :key)
 	adminGroup.PUT("/content/:key", content.UpdateContentHandler)
 
 	// Admin dashboard
-	adminGroup.GET("/overview", admin.GetOverviewHandler)
+	adminGroup.GET("/overview", admin.GetOverviewHandler, middleware.AdminPermissionMiddleware("overview"))
 
 	// Admin inbox and sent views
-	adminGroup.GET("/inbox", admin.GetAdminInboxHandler)
-	adminGroup.GET("/sent", admin.GetAdminSentHandler)
+	adminGroup.GET("/inbox", admin.GetAdminInboxHandler, middleware.AdminPermissionMiddleware("all_inbox"))
+	adminGroup.GET("/sent", admin.GetAdminSentHandler, middleware.AdminPermissionMiddleware("all_sent"))
 
 	// Admin menu and permissions
 	adminGroup.GET("/menus", admin.GetMenusHandler)

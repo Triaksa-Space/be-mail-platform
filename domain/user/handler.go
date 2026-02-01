@@ -789,7 +789,41 @@ func GetUserMeHandler(c echo.Context) error {
 		fmt.Println("error updateLastLogin", err)
 	}
 
-	return c.JSON(http.StatusOK, user)
+	// Build response
+	response := map[string]interface{}{
+		"id":            utils.EncodeID(int(user.ID)),
+		"email":         user.Email,
+		"role_id":       user.RoleID,
+		"binding_email": user.BindingEmail,
+		"created_at":    user.CreatedAt,
+		"updated_at":    user.UpdatedAt,
+	}
+
+	// For admin users (role_id = 2), include permissions
+	if user.RoleID == 2 {
+		var permissions []string
+		err := config.DB.Select(&permissions, `
+			SELECT permission_key FROM admin_permissions
+			WHERE user_id = ?
+			ORDER BY permission_key
+		`, userID)
+		if err != nil {
+			fmt.Println("Error fetching admin permissions:", err)
+			permissions = []string{}
+		}
+		response["permissions"] = permissions
+	}
+
+	// For superadmin (role_id = 0), return all permissions
+	if user.RoleID == 0 {
+		response["permissions"] = []string{
+			"overview", "user_list", "create_single", "create_bulk",
+			"all_inbox", "all_sent", "terms_of_services", "privacy_policy",
+			"roles_permissions",
+		}
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 func ListAdminUsersHandler(c echo.Context) error {
