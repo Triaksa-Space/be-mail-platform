@@ -97,4 +97,11 @@ func RegisterRoutes(e *echo.Echo) {
 	adminGroup.GET("/menus", admin.GetMenusHandler)
 	adminGroup.GET("/permissions", admin.GetPermissionsHandler, middleware.RoleMiddleware(superAdminOnly))
 	adminGroup.PUT("/permissions/:role_id", admin.UpdatePermissionsHandler, middleware.RoleMiddleware(superAdminOnly))
+
+	// Admin user management (Roles & Permissions page) - Superadmin only
+	adminGroup.GET("/admins", admin.ListAdminsHandler, middleware.RoleMiddleware(superAdminOnly))
+	adminGroup.GET("/admins/:id", admin.GetAdminHandler, middleware.RoleMiddleware(superAdminOnly))
+	adminGroup.POST("/admins", admin.CreateAdminHandler, middleware.RoleMiddleware(superAdminOnly))
+	adminGroup.PUT("/admins/:id", admin.UpdateAdminHandler, middleware.RoleMiddleware(superAdminOnly))
+	adminGroup.DELETE("/admins/:id", admin.DeleteAdminHandler, middleware.RoleMiddleware(superAdminOnly))
 }

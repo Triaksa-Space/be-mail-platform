@@ -75,6 +75,8 @@ func ForgotPasswordHandler(c echo.Context) error {
 		return c.JSON(http.StatusOK, genericResponse)
 	}
 
+	fmt.Println("code forgot passsword", code)
+
 	// Hash the code
 	codeHash := hashCode(code)
 	expiresAt := time.Now().Add(CodeExpiry)
@@ -171,8 +173,8 @@ func VerifyCodeHandler(c echo.Context) error {
 	// Check if blocked
 	if resetCode.BlockedUntil.Valid && resetCode.BlockedUntil.Time.After(now) {
 		return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
-			"error":        "too_many_attempts",
-			"message":      "Too many failed attempts. Try again in 5 minutes.",
+			"error":         "too_many_attempts",
+			"message":       "Too many failed attempts. Try again in 5 minutes.",
 			"blocked_until": resetCode.BlockedUntil.Time.Format(time.RFC3339),
 		})
 	}
@@ -203,8 +205,8 @@ func VerifyCodeHandler(c echo.Context) error {
 				fmt.Println("Error updating failed attempts:", err)
 			}
 			return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
-				"error":        "too_many_attempts",
-				"message":      "Too many failed attempts. Try again in 5 minutes.",
+				"error":         "too_many_attempts",
+				"message":       "Too many failed attempts. Try again in 5 minutes.",
 				"blocked_until": blockedUntil.Format(time.RFC3339),
 			})
 		}
