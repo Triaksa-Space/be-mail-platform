@@ -15,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run cmd/main.go [server|sync]")
+		fmt.Println("Usage: go run cmd/main.go [server|sync|sync_process|sync_sent]")
 		os.Exit(1)
 	}
 
@@ -27,10 +27,14 @@ func main() {
 		runServer()
 	case "sync":
 		runSync()
+	case "sync_process":
+		runSyncWithProcess() // New: Sync + Process in one
 	case "sync_sent":
 		runSyncSent()
+	case "process":
+		runProcess() // New: Process only
 	default:
-		fmt.Println("Invalid command. Usage: go run cmd/main.go [server|sync]")
+		fmt.Println("Invalid command. Usage: go run cmd/main.go [server|sync|sync_process|sync_sent|process]")
 		os.Exit(1)
 	}
 }
@@ -123,5 +127,99 @@ func runSync() {
 	}()
 
 	// Block the main goroutine to keep the application running
+	select {}
+}
+
+// runSyncWithProcess runs both sync and process in one cron
+// Recommended for most use cases - handles 200+ emails/minute
+func runSyncWithProcess() {
+	fmt.Println("==============================================")
+	fmt.Println("  STARTING SYNC + PROCESS CRON")
+	fmt.Println("  - Sync interval: 10 seconds")
+	fmt.Println("  - Process interval: 5 seconds")
+	fmt.Println("  - Batch size: 50 emails")
+	fmt.Println("  - Workers: 10 parallel")
+	fmt.Println("==============================================")
+
+	// Sync cron: Pull from S3 every 10 seconds
+	go func() {
+		// Run immediately on start
+		fmt.Println("[Sync] Initial sync starting...")
+		if err := email.SyncEmails(); err != nil {
+			fmt.Println("[Sync] Initial sync error:", err)
+		}
+
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			fmt.Println("[Sync] Starting S3 sync...", time.Now())
+			err := email.SyncEmails()
+			if err != nil {
+				fmt.Println("[Sync] Error:", err)
+			}
+			fmt.Println("[Sync] Completed", time.Now())
+		}
+	}()
+
+	// Process cron: Parse emails every 5 seconds
+	go func() {
+		// Small delay to let sync run first
+		time.Sleep(3 * time.Second)
+
+		// Run immediately
+		fmt.Println("[Process] Initial process starting...")
+		if err := email.ProcessAllPendingEmails(); err != nil {
+			fmt.Println("[Process] Initial process error:", err)
+		}
+
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			fmt.Println("[Process] Starting email processing...", time.Now())
+			err := email.ProcessAllPendingEmails()
+			if err != nil {
+				fmt.Println("[Process] Error:", err)
+			}
+		}
+	}()
+
+	// Block the main goroutine
+	select {}
+}
+
+// runProcess runs only the process cron (useful if sync is separate)
+func runProcess() {
+	fmt.Println("==============================================")
+	fmt.Println("  STARTING PROCESS-ONLY CRON")
+	fmt.Println("  - Process interval: 5 seconds")
+	fmt.Println("  - Batch size: 50 emails")
+	fmt.Println("  - Workers: 10 parallel")
+	fmt.Println("==============================================")
+
+	// Run immediately
+	fmt.Println("[Process] Initial process starting...")
+	if err := email.ProcessAllPendingEmails(); err != nil {
+		fmt.Println("[Process] Initial process error:", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			fmt.Println("[Process] Starting email processing...", time.Now())
+			err := email.ProcessAllPendingEmails()
+			if err != nil {
+				fmt.Println("[Process] Error:", err)
+			}
+		}
+	}()
+
+	// Block the main goroutine
 	select {}
 }
