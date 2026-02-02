@@ -2616,6 +2616,92 @@ func GetUserSentEmailsHandler(c echo.Context) error {
 	})
 }
 
+// GetUserSentEmailDetailHandler returns a single sent email detail for the authenticated user
+// GET /email/sent/detail/:id
+func GetUserSentEmailDetailHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+
+	// Decode email ID
+	emailIDParam := c.Param("id")
+	emailID, err := utils.DecodeID(emailIDParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid email ID",
+		})
+	}
+
+	// Get sent email from database (only if belongs to user)
+	type SentEmailDetail struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		FromEmail   string         `db:"from_email"`
+		ToEmail     string         `db:"to_email"`
+		Subject     string         `db:"subject"`
+		BodyPreview sql.NullString `db:"body_preview"`
+		Body        sql.NullString `db:"body"`
+		Attachments sql.NullString `db:"attachments"`
+		Status      string         `db:"status"`
+		SentAt      sql.NullTime   `db:"sent_at"`
+		CreatedAt   time.Time      `db:"created_at"`
+	}
+
+	var email SentEmailDetail
+	err = config.DB.Get(&email, `
+		SELECT id, user_id, from_email, to_email, subject, body_preview, body,
+		       attachments, status, sent_at, created_at
+		FROM sent_emails
+		WHERE id = ? AND user_id = ?
+	`, emailID, userID)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Email not found",
+			})
+		}
+		fmt.Println("Error fetching sent email detail:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Internal server error",
+		})
+	}
+
+	// Build response
+	bodyPreview := ""
+	if email.BodyPreview.Valid {
+		bodyPreview = email.BodyPreview.String
+	}
+	body := ""
+	if email.Body.Valid {
+		body = email.Body.String
+	}
+	attachments := ""
+	if email.Attachments.Valid {
+		attachments = email.Attachments.String
+	}
+	var sentAt *time.Time
+	if email.SentAt.Valid {
+		sentAt = &email.SentAt.Time
+	}
+
+	hasAttachments := attachments != "" && attachments != "[]"
+
+	response := map[string]interface{}{
+		"id":              utils.EncodeID(int(email.ID)),
+		"from":            email.FromEmail,
+		"to":              email.ToEmail,
+		"subject":         email.Subject,
+		"body_preview":    bodyPreview,
+		"body":            body,
+		"attachments":     attachments,
+		"has_attachments": hasAttachments,
+		"status":          email.Status,
+		"sent_at":         sentAt,
+		"created_at":      email.CreatedAt,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
 // SaveSentEmail saves a sent email to the sent_emails table
 func SaveSentEmail(userID int64, fromEmail, toEmail, subject, body string, attachments []string, provider, providerMsgID, status string) error {
 	// Create preview

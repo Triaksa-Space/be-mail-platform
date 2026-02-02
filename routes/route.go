@@ -62,23 +62,25 @@ func RegisterRoutes(e *echo.Echo) {
 	// Email routes
 	emailGroup := e.Group("/email", middleware.JWTMiddleware)
 	emailGroup.POST("/upload/attachment", email.UploadAttachmentHandler)
-	emailGroup.GET("/:id", email.GetEmailHandler, middleware.RoleMiddleware(adminRoles))
 	emailGroup.GET("/by_user", email.ListEmailByTokenHandler)
 	emailGroup.GET("/by_user/detail/:id", email.GetEmailHandler)
 	emailGroup.POST("/by_user/download/file", email.GetFileEmailToDownloadHandler)
 	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(adminRoles))
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
 	emailGroup.GET("/sent/by_user/:id", email.ListSentEmailsByUserIDHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("all_sent")) // Admin: list sent emails by user
-	emailGroup.GET("/sent", email.GetUserSentEmailsHandler) // User's own sent emails
+	emailGroup.GET("/sent/list", email.GetUserSentEmailsHandler)            // User's own sent emails list
+	emailGroup.GET("/sent/detail/:id", email.GetUserSentEmailDetailHandler) // User's own sent email detail
+	emailGroup.GET("/sent", email.GetUserSentEmailsHandler)                 // User's own sent emails
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.POST("/send/resend", email.SendEmailViaResendHandler)
 	emailGroup.POST("/send/smtp", email.SendEmailSMTPHandler)
 	emailGroup.POST("/send/test/haraka", email.SendEmailSMTPHHandler)
 	emailGroup.POST("/send/url_attachment", email.SendEmailUrlAttachmentHandler)
 	emailGroup.POST("/delete-attachment", email.DeleteUrlAttachmentHandler)
-	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(adminRoles))
-	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(adminRoles))
 	emailGroup.GET("/bucket/sync", email.SyncBucketInboxHandler, middleware.RoleMiddleware(adminRoles))
+	emailGroup.GET("/", email.ListEmailsHandler, middleware.RoleMiddleware(adminRoles))
+	emailGroup.GET("/:id", email.GetEmailHandler, middleware.RoleMiddleware(adminRoles))       // Wildcard route - must be last
+	emailGroup.DELETE("/:id", email.DeleteEmailHandler, middleware.RoleMiddleware(adminRoles)) // Wildcard route - must be last
 
 	// Admin routes
 	adminGroup := e.Group("/admin", middleware.JWTMiddleware)
