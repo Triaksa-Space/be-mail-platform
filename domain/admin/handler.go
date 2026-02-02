@@ -193,8 +193,11 @@ func GetAdminInboxHandler(c echo.Context) error {
 		page = 1
 	}
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	offset := (page - 1) * limit
 
@@ -397,8 +400,11 @@ func GetAdminSentHandler(c echo.Context) error {
 		page = 1
 	}
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	offset := (page - 1) * limit
 

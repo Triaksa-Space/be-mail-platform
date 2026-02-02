@@ -1106,8 +1106,11 @@ func ListSentEmailsByUserIDHandler(c echo.Context) error {
 		page = 1
 	}
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 20
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	offset := (page - 1) * limit
 
@@ -1272,6 +1275,20 @@ func ListEmailByIDHandler(c echo.Context) error {
 		})
 	}
 
+	// Pagination
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
 	emailUser, err := getUserEmail(userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -1285,38 +1302,56 @@ func ListEmailByIDHandler(c echo.Context) error {
 	}
 	fmt.Println("Finish refresh internal mailbox")
 
+	// Get total count
+	var total int
+	err = config.DB.Get(&total, `SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = "inbox"`, userID)
+	if err != nil {
+		fmt.Println("Failed to count emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to count emails"})
+	}
+
 	var emails []Email
-	err = config.DB.Select(&emails, `SELECT id, 
+	err = config.DB.Select(&emails, `SELECT id,
 			is_read,
-            user_id, 
-            sender_email, 
-			sender_name, 
-            subject, 
+            user_id,
+            sender_email,
+			sender_name,
+            subject,
             preview,
             body,
             timestamp,
 			message_id,
-			attachments, 
-            created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
+			attachments,
+            created_at,
+            updated_at FROM emails WHERE user_id = ? AND email_type = "inbox" ORDER BY timestamp DESC LIMIT ? OFFSET ?`, userID, limit, offset)
 	if err != nil {
 		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
-	response := make([]EmailResponse, len(emails))
+	data := make([]EmailResponse, len(emails))
 	for i, email := range emails {
 		email.EmailEncodeID = utils.EncodeID(int(email.ID))
 		email.UserEncodeID = utils.EncodeID(int(email.UserID))
-		response[i] = EmailResponse{
+		data[i] = EmailResponse{
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
 		}
 		// Convert JSON string to []string
-		response[i].ListAttachments = getAttachmentURLs(email.Attachments)
+		data[i].ListAttachments = getAttachmentURLs(email.Attachments)
 	}
 
-	return c.JSON(http.StatusOK, response)
+	totalPages := (total + limit - 1) / limit
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"data": data,
+		"pagination": map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
 }
 
 func getAttachmentURLs(attachmentsJSON string) []Attachment {
@@ -2524,8 +2559,11 @@ func GetUserSentEmailsHandler(c echo.Context) error {
 		page = 1
 	}
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 20
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	offset := (page - 1) * limit
 
