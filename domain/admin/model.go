@@ -15,31 +15,65 @@ type DashboardCounter struct {
 
 // OverviewResponse represents the admin dashboard overview
 type OverviewResponse struct {
-	Users       UsersOverview       `json:"users"`
-	Emails      EmailsOverview      `json:"emails"`
-	Recent      RecentOverview      `json:"recent"`
-	GeneratedAt time.Time           `json:"generated_at"`
+	Stats       OverviewStats        `json:"stats"`
+	Inbox       []OverviewInboxEmail `json:"inbox"`
+	Sent        []OverviewSentEmail  `json:"sent"`
+	GeneratedAt time.Time            `json:"generated_at"`
 }
 
-// UsersOverview contains user statistics
+// OverviewStats contains dashboard statistics
+type OverviewStats struct {
+	TotalUsersMailria int64 `json:"total_users_mailria"`
+	TotalUsersMailsaja int64 `json:"total_users_mailsaja"`
+	TotalInbox        int64 `json:"total_inbox"`
+	TotalSent         int64 `json:"total_sent"`
+}
+
+// OverviewInboxEmail represents an inbox email in overview
+type OverviewInboxEmail struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"user_id"`
+	UserEmail      string    `json:"user_email"`
+	From           string    `json:"from"`
+	FromName       string    `json:"from_name"`
+	Subject        string    `json:"subject"`
+	Preview        string    `json:"preview"`
+	Body           string    `json:"body"`
+	IsRead         bool      `json:"is_read"`
+	HasAttachments bool      `json:"has_attachments"`
+	ReceivedAt     time.Time `json:"received_at"`
+}
+
+// OverviewSentEmail represents a sent email in overview
+type OverviewSentEmail struct {
+	ID          string     `json:"id"`
+	UserID      string     `json:"user_id"`
+	UserEmail   string     `json:"user_email"`
+	From        string     `json:"from"`
+	To          string     `json:"to"`
+	Subject     string     `json:"subject"`
+	Preview     string     `json:"preview"`
+	Body        string     `json:"body"`
+	Status      string     `json:"status"`
+	SentAt      *time.Time `json:"sent_at"`
+}
+
+// Legacy types for backward compatibility (can be removed if not used elsewhere)
 type UsersOverview struct {
 	Total    int64            `json:"total"`
 	ByDomain map[string]int64 `json:"by_domain"`
 }
 
-// EmailsOverview contains email statistics
 type EmailsOverview struct {
 	TotalInbox int64 `json:"total_inbox"`
 	TotalSent  int64 `json:"total_sent"`
 }
 
-// RecentOverview contains recent emails
 type RecentOverview struct {
 	Inbox []RecentInboxEmail `json:"inbox"`
 	Sent  []RecentSentEmail  `json:"sent"`
 }
 
-// RecentInboxEmail represents a recent inbox email
 type RecentInboxEmail struct {
 	ID         string    `json:"id"`
 	UserEmail  string    `json:"user_email"`
@@ -48,7 +82,6 @@ type RecentInboxEmail struct {
 	ReceivedAt time.Time `json:"received_at"`
 }
 
-// RecentSentEmail represents a recent sent email
 type RecentSentEmail struct {
 	ID        string    `json:"id"`
 	UserEmail string    `json:"user_email"`

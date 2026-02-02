@@ -68,6 +68,7 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.POST("/by_user/download/file", email.GetFileEmailToDownloadHandler)
 	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(adminRoles))
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
+	emailGroup.GET("/sent/by_user/:id", email.ListSentEmailsByUserIDHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("all_sent")) // Admin: list sent emails by user
 	emailGroup.GET("/sent", email.GetUserSentEmailsHandler) // User's own sent emails
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.POST("/send/resend", email.SendEmailViaResendHandler)
@@ -91,7 +92,9 @@ func RegisterRoutes(e *echo.Echo) {
 
 	// Admin inbox and sent views
 	adminGroup.GET("/inbox", admin.GetAdminInboxHandler, middleware.AdminPermissionMiddleware("all_inbox"))
+	adminGroup.GET("/inbox/:id", admin.GetAdminInboxDetailHandler, middleware.AdminPermissionMiddleware("all_inbox"))
 	adminGroup.GET("/sent", admin.GetAdminSentHandler, middleware.AdminPermissionMiddleware("all_sent"))
+	adminGroup.GET("/sent/:id", admin.GetAdminSentDetailHandler, middleware.AdminPermissionMiddleware("all_sent"))
 
 	// Admin menu and permissions
 	adminGroup.GET("/menus", admin.GetMenusHandler)

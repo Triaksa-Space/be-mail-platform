@@ -2,6 +2,7 @@ package email
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -332,52 +333,33 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(req.Attachments)
 
-	var preview string
-	length := 25
-	if len(req.Body) > length {
-		preview = req.Body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview
+	preview := generatePreview("", req.Body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'ses', 'sent', NOW(), NOW())`,
+		userID, emailUser, req.To, req.Subject, preview, req.Body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
 	}
 
 	// Update last login
@@ -473,52 +455,33 @@ func SendEmailHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
 
-	var preview string
-	length := 25
-	if len(body) > length {
-		preview = body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview
+	preview := generatePreview("", body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'ses', 'sent', NOW(), NOW())`,
+		userID, emailUser, to, subject, preview, body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
 	}
 
 	// Update last login
@@ -589,52 +552,34 @@ func SendEmailViaResendHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(req.Attachments)
 
-	var preview string
-	length := 25
-	if len(req.Body) > length {
-		preview = req.Body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview (strip HTML and limit length)
+	preview := generatePreview("", req.Body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'resend', 'sent', NOW(), NOW())`,
+		userID, emailUser, req.To, req.Subject, preview, req.Body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
+		// Don't return error since email was sent successfully
 	}
 
 	// Update last login
@@ -730,52 +675,33 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
 
-	var preview string
-	length := 25
-	if len(body) > length {
-		preview = body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview
+	preview := generatePreview("", body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'haraka', 'sent', NOW(), NOW())`,
+		userID, emailUser, to, subject, preview, body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
 	}
 
 	// Update last login
@@ -795,7 +721,7 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 	})
 }
 
-// SendEmailHandler handles sending emails with attachments
+// SendEmailSMTPHandler handles sending emails via SMTP with attachments
 func SendEmailSMTPHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
@@ -871,52 +797,33 @@ func SendEmailSMTPHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
 
-	var preview string
-	length := 25
-	if len(body) > length {
-		preview = body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview
+	preview := generatePreview("", body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'smtp', 'sent', NOW(), NOW())`,
+		userID, emailUser, to, subject, preview, body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
 	}
 
 	// Update last login
@@ -1172,13 +1079,131 @@ func SentEmailByIDHandler(c echo.Context) error {
 	var user user.User
 	err := config.DB.Get(&user, `
 			SELECT id, email, role_id, last_login, sent_emails, last_email_time, created_at, updated_at
-			FROM users 
+			FROM users
 			WHERE id = ?`, userID)
 	if err != nil {
 		return err
 	}
 
 	return c.JSON(http.StatusOK, user)
+}
+
+// ListSentEmailsByUserIDHandler returns sent emails for a specific user (admin only)
+// GET /email/sent/by_user/:id
+func ListSentEmailsByUserIDHandler(c echo.Context) error {
+	// Decode user ID from param
+	userIDParam := c.Param("id")
+	targetUserID, err := utils.DecodeID(userIDParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid user ID",
+		})
+	}
+
+	// Pagination
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	// Get total count
+	var total int
+	err = config.DB.Get(&total, `SELECT COUNT(*) FROM sent_emails WHERE user_id = ?`, targetUserID)
+	if err != nil {
+		fmt.Println("Error counting sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Get sent emails
+	type SentEmailRow struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		FromEmail   string         `db:"from_email"`
+		ToEmail     string         `db:"to_email"`
+		Subject     string         `db:"subject"`
+		BodyPreview sql.NullString `db:"body_preview"`
+		Body        sql.NullString `db:"body"`
+		Attachments sql.NullString `db:"attachments"`
+		Provider    sql.NullString `db:"provider"`
+		Status      string         `db:"status"`
+		SentAt      sql.NullTime   `db:"sent_at"`
+		CreatedAt   time.Time      `db:"created_at"`
+	}
+
+	var emails []SentEmailRow
+	err = config.DB.Select(&emails, `
+		SELECT id, user_id, from_email, to_email, subject, body_preview, body,
+		       attachments, provider, status, sent_at, created_at
+		FROM sent_emails
+		WHERE user_id = ?
+		ORDER BY COALESCE(sent_at, created_at) DESC
+		LIMIT ? OFFSET ?
+	`, targetUserID, limit, offset)
+
+	if err != nil {
+		fmt.Println("Error fetching sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Build response
+	data := make([]map[string]interface{}, 0)
+	for _, e := range emails {
+		bodyPreview := ""
+		if e.BodyPreview.Valid {
+			bodyPreview = e.BodyPreview.String
+		}
+		body := ""
+		if e.Body.Valid {
+			body = e.Body.String
+		}
+		attachments := ""
+		if e.Attachments.Valid {
+			attachments = e.Attachments.String
+		}
+		provider := ""
+		if e.Provider.Valid {
+			provider = e.Provider.String
+		}
+		var sentAt *time.Time
+		if e.SentAt.Valid {
+			sentAt = &e.SentAt.Time
+		}
+
+		hasAttachments := attachments != "" && attachments != "[]"
+
+		data = append(data, map[string]interface{}{
+			"id":              utils.EncodeID(int(e.ID)),
+			"user_id":         utils.EncodeID(int(e.UserID)),
+			"from":            e.FromEmail,
+			"to":              e.ToEmail,
+			"subject":         e.Subject,
+			"body_preview":    bodyPreview,
+			"body":            body,
+			"attachments":     attachments,
+			"has_attachments": hasAttachments,
+			"provider":        provider,
+			"status":          e.Status,
+			"sent_at":         sentAt,
+			"created_at":      e.CreatedAt,
+		})
+	}
+
+	totalPages := (total + limit - 1) / limit
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"data": data,
+		"pagination": map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
 }
 
 func ListEmailByTokenHandler(c echo.Context) error {

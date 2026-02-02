@@ -15,34 +15,26 @@ import (
 
 // GetOverviewHandler returns the admin dashboard overview
 func GetOverviewHandler(c echo.Context) error {
-	// Get total users count
-	var totalUsers int64
-	err := config.DB.Get(&totalUsers, "SELECT COUNT(*) FROM users WHERE role_id = 1")
-	if err != nil {
-		fmt.Println("Error counting users:", err)
-		totalUsers = 0
-	}
-
-	// Get users by domain
-	type DomainCount struct {
-		Domain string `db:"domain"`
-		Count  int64  `db:"count"`
-	}
-	var domainCounts []DomainCount
-	err = config.DB.Select(&domainCounts, `
-		SELECT SUBSTRING_INDEX(email, '@', -1) as domain, COUNT(*) as count
-		FROM users
-		WHERE role_id = 1
-		GROUP BY domain
-		ORDER BY count DESC
+	// Get users count for mailria.com
+	var totalUsersMailria int64
+	err := config.DB.Get(&totalUsersMailria, `
+		SELECT COUNT(*) FROM users
+		WHERE role_id = 1 AND email LIKE '%@mailria.com'
 	`)
 	if err != nil {
-		fmt.Println("Error counting users by domain:", err)
+		fmt.Println("Error counting mailria users:", err)
+		totalUsersMailria = 0
 	}
 
-	byDomain := make(map[string]int64)
-	for _, dc := range domainCounts {
-		byDomain[dc.Domain] = dc.Count
+	// Get users count for mailsaja.com
+	var totalUsersMailsaja int64
+	err = config.DB.Get(&totalUsersMailsaja, `
+		SELECT COUNT(*) FROM users
+		WHERE role_id = 1 AND email LIKE '%@mailsaja.com'
+	`)
+	if err != nil {
+		fmt.Println("Error counting mailsaja users:", err)
+		totalUsersMailsaja = 0
 	}
 
 	// Get total inbox count
@@ -61,86 +53,132 @@ func GetOverviewHandler(c echo.Context) error {
 		totalSent = 0
 	}
 
-	// Get recent inbox emails
-	type RecentInbox struct {
-		ID        int64     `db:"id"`
-		UserEmail string    `db:"user_email"`
-		From      string    `db:"sender_email"`
-		Subject   string    `db:"subject"`
-		Timestamp time.Time `db:"timestamp"`
+	// Get recent inbox emails with full details
+	type InboxRow struct {
+		ID             int64          `db:"id"`
+		UserID         int64          `db:"user_id"`
+		UserEmail      string         `db:"user_email"`
+		SenderEmail    string         `db:"sender_email"`
+		SenderName     string         `db:"sender_name"`
+		Subject        sql.NullString `db:"subject"`
+		Preview        sql.NullString `db:"preview"`
+		Body           sql.NullString `db:"body"`
+		IsRead         bool           `db:"is_read"`
+		Attachments    sql.NullString `db:"attachments"`
+		Timestamp      time.Time      `db:"timestamp"`
 	}
-	var recentInbox []RecentInbox
-	err = config.DB.Select(&recentInbox, `
-		SELECT e.id, u.email as user_email, e.sender_email, e.subject, e.timestamp
+	var inboxRows []InboxRow
+	err = config.DB.Select(&inboxRows, `
+		SELECT e.id, e.user_id, u.email as user_email,
+		       e.sender_email, e.sender_name, e.subject, e.preview, e.body,
+		       e.is_read, e.attachments, e.timestamp
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
 		ORDER BY e.timestamp DESC
-		LIMIT 5
+		LIMIT 10
 	`)
 	if err != nil {
 		fmt.Println("Error fetching recent inbox:", err)
 	}
 
-	recentInboxEmails := make([]RecentInboxEmail, 0)
-	for _, r := range recentInbox {
-		recentInboxEmails = append(recentInboxEmails, RecentInboxEmail{
-			ID:         utils.EncodeID(int(r.ID)),
-			UserEmail:  r.UserEmail,
-			From:       r.From,
-			Subject:    r.Subject,
-			ReceivedAt: r.Timestamp,
+	inboxEmails := make([]OverviewInboxEmail, 0)
+	for _, r := range inboxRows {
+		subject := ""
+		if r.Subject.Valid {
+			subject = r.Subject.String
+		}
+		preview := ""
+		if r.Preview.Valid {
+			preview = r.Preview.String
+		}
+		body := ""
+		if r.Body.Valid {
+			body = r.Body.String
+		}
+		hasAttachments := false
+		if r.Attachments.Valid && r.Attachments.String != "" && r.Attachments.String != "[]" {
+			hasAttachments = true
+		}
+
+		inboxEmails = append(inboxEmails, OverviewInboxEmail{
+			ID:             utils.EncodeID(int(r.ID)),
+			UserID:         utils.EncodeID(int(r.UserID)),
+			UserEmail:      r.UserEmail,
+			From:           r.SenderEmail,
+			FromName:       r.SenderName,
+			Subject:        subject,
+			Preview:        preview,
+			Body:           body,
+			IsRead:         r.IsRead,
+			HasAttachments: hasAttachments,
+			ReceivedAt:     r.Timestamp,
 		})
 	}
 
-	// Get recent sent emails
-	type RecentSent struct {
-		ID        int64        `db:"id"`
-		UserEmail string       `db:"user_email"`
-		To        string       `db:"to_email"`
-		Subject   string       `db:"subject"`
-		SentAt    sql.NullTime `db:"sent_at"`
+	// Get recent sent emails with full details
+	type SentRow struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		UserEmail   string         `db:"user_email"`
+		FromEmail   string         `db:"from_email"`
+		ToEmail     string         `db:"to_email"`
+		Subject     string         `db:"subject"`
+		BodyPreview sql.NullString `db:"body_preview"`
+		Body        sql.NullString `db:"body"`
+		Status      string         `db:"status"`
+		SentAt      sql.NullTime   `db:"sent_at"`
 	}
-	var recentSent []RecentSent
-	err = config.DB.Select(&recentSent, `
-		SELECT s.id, u.email as user_email, s.to_email, s.subject, s.sent_at
+	var sentRows []SentRow
+	err = config.DB.Select(&sentRows, `
+		SELECT s.id, s.user_id, u.email as user_email,
+		       s.from_email, s.to_email, s.subject, s.body_preview, s.body, s.status, s.sent_at
 		FROM sent_emails s
 		JOIN users u ON s.user_id = u.id
-		WHERE s.sent_at IS NOT NULL
-		ORDER BY s.sent_at DESC
-		LIMIT 5
+		ORDER BY COALESCE(s.sent_at, s.created_at) DESC
+		LIMIT 10
 	`)
 	if err != nil {
 		fmt.Println("Error fetching recent sent:", err)
 	}
 
-	recentSentEmails := make([]RecentSentEmail, 0)
-	for _, r := range recentSent {
-		var sentAt time.Time
-		if r.SentAt.Valid {
-			sentAt = r.SentAt.Time
+	sentEmails := make([]OverviewSentEmail, 0)
+	for _, r := range sentRows {
+		preview := ""
+		if r.BodyPreview.Valid {
+			preview = r.BodyPreview.String
 		}
-		recentSentEmails = append(recentSentEmails, RecentSentEmail{
+		body := ""
+		if r.Body.Valid {
+			body = r.Body.String
+		}
+		var sentAt *time.Time
+		if r.SentAt.Valid {
+			sentAt = &r.SentAt.Time
+		}
+
+		sentEmails = append(sentEmails, OverviewSentEmail{
 			ID:        utils.EncodeID(int(r.ID)),
+			UserID:    utils.EncodeID(int(r.UserID)),
 			UserEmail: r.UserEmail,
-			To:        r.To,
+			From:      r.FromEmail,
+			To:        r.ToEmail,
 			Subject:   r.Subject,
+			Preview:   preview,
+			Body:      body,
+			Status:    r.Status,
 			SentAt:    sentAt,
 		})
 	}
 
 	response := OverviewResponse{
-		Users: UsersOverview{
-			Total:    totalUsers,
-			ByDomain: byDomain,
+		Stats: OverviewStats{
+			TotalUsersMailria:  totalUsersMailria,
+			TotalUsersMailsaja: totalUsersMailsaja,
+			TotalInbox:         totalInbox,
+			TotalSent:          totalSent,
 		},
-		Emails: EmailsOverview{
-			TotalInbox: totalInbox,
-			TotalSent:  totalSent,
-		},
-		Recent: RecentOverview{
-			Inbox: recentInboxEmails,
-			Sent:  recentSentEmails,
-		},
+		Inbox:       inboxEmails,
+		Sent:        sentEmails,
 		GeneratedAt: time.Now(),
 	}
 
@@ -264,6 +302,93 @@ func GetAdminInboxHandler(c echo.Context) error {
 	})
 }
 
+// GetAdminInboxDetailHandler returns a single inbox email detail for admin view
+func GetAdminInboxDetailHandler(c echo.Context) error {
+	// Decode email ID
+	emailIDParam := c.Param("id")
+	emailID, err := utils.DecodeID(emailIDParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid email ID",
+		})
+	}
+
+	// Get inbox email from database
+	type InboxEmailDetail struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		UserEmail   string         `db:"user_email"`
+		SenderEmail string         `db:"sender_email"`
+		SenderName  string         `db:"sender_name"`
+		Subject     sql.NullString `db:"subject"`
+		Preview     sql.NullString `db:"preview"`
+		Body        sql.NullString `db:"body"`
+		Attachments sql.NullString `db:"attachments"`
+		IsRead      bool           `db:"is_read"`
+		Timestamp   time.Time      `db:"timestamp"`
+		CreatedAt   time.Time      `db:"created_at"`
+	}
+
+	var email InboxEmailDetail
+	err = config.DB.Get(&email, `
+		SELECT e.id, e.user_id, u.email as user_email,
+		       e.sender_email, e.sender_name, e.subject, e.preview, e.body,
+		       e.attachments, e.is_read, e.timestamp, e.created_at
+		FROM emails e
+		JOIN users u ON e.user_id = u.id
+		WHERE e.id = ?
+	`, emailID)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Email not found",
+			})
+		}
+		fmt.Println("Error fetching inbox email detail:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Internal server error",
+		})
+	}
+
+	// Build response
+	subject := ""
+	if email.Subject.Valid {
+		subject = email.Subject.String
+	}
+	preview := ""
+	if email.Preview.Valid {
+		preview = email.Preview.String
+	}
+	body := ""
+	if email.Body.Valid {
+		body = email.Body.String
+	}
+	attachments := ""
+	if email.Attachments.Valid {
+		attachments = email.Attachments.String
+	}
+	hasAttachments := attachments != "" && attachments != "[]"
+
+	response := map[string]interface{}{
+		"id":              utils.EncodeID(int(email.ID)),
+		"user_id":         utils.EncodeID(int(email.UserID)),
+		"user_email":      email.UserEmail,
+		"from":            email.SenderEmail,
+		"from_name":       email.SenderName,
+		"subject":         subject,
+		"preview":         preview,
+		"body":            body,
+		"attachments":     attachments,
+		"is_read":         email.IsRead,
+		"has_attachments": hasAttachments,
+		"received_at":     email.Timestamp,
+		"created_at":      email.CreatedAt,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
 // GetAdminSentHandler returns all sent emails for admin view
 func GetAdminSentHandler(c echo.Context) error {
 	// Pagination
@@ -381,6 +506,97 @@ func GetAdminSentHandler(c echo.Context) error {
 			TotalPages: totalPages,
 		},
 	})
+}
+
+// GetAdminSentDetailHandler returns a single sent email detail for admin view
+func GetAdminSentDetailHandler(c echo.Context) error {
+	// Decode email ID
+	emailIDParam := c.Param("id")
+	emailID, err := utils.DecodeID(emailIDParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid email ID",
+		})
+	}
+
+	// Get sent email from database
+	type SentEmailDetail struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		UserEmail   string         `db:"user_email"`
+		FromEmail   string         `db:"from_email"`
+		ToEmail     string         `db:"to_email"`
+		Subject     string         `db:"subject"`
+		BodyPreview sql.NullString `db:"body_preview"`
+		Body        sql.NullString `db:"body"`
+		Attachments sql.NullString `db:"attachments"`
+		Provider    sql.NullString `db:"provider"`
+		Status      string         `db:"status"`
+		SentAt      sql.NullTime   `db:"sent_at"`
+		CreatedAt   time.Time      `db:"created_at"`
+	}
+
+	var email SentEmailDetail
+	err = config.DB.Get(&email, `
+		SELECT s.id, s.user_id, u.email as user_email,
+		       s.from_email, s.to_email, s.subject, s.body_preview, s.body,
+		       s.attachments, s.provider, s.status, s.sent_at, s.created_at
+		FROM sent_emails s
+		JOIN users u ON s.user_id = u.id
+		WHERE s.id = ?
+	`, emailID)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Email not found",
+			})
+		}
+		fmt.Println("Error fetching sent email detail:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Internal server error",
+		})
+	}
+
+	// Build response
+	bodyPreview := ""
+	if email.BodyPreview.Valid {
+		bodyPreview = email.BodyPreview.String
+	}
+	body := ""
+	if email.Body.Valid {
+		body = email.Body.String
+	}
+	attachments := ""
+	if email.Attachments.Valid {
+		attachments = email.Attachments.String
+	}
+	provider := ""
+	if email.Provider.Valid {
+		provider = email.Provider.String
+	}
+	var sentAt *time.Time
+	if email.SentAt.Valid {
+		sentAt = &email.SentAt.Time
+	}
+
+	response := map[string]interface{}{
+		"id":           utils.EncodeID(int(email.ID)),
+		"user_id":      utils.EncodeID(int(email.UserID)),
+		"user_email":   email.UserEmail,
+		"from":         email.FromEmail,
+		"to":           email.ToEmail,
+		"subject":      email.Subject,
+		"body_preview": bodyPreview,
+		"body":         body,
+		"attachments":  attachments,
+		"provider":     provider,
+		"status":       email.Status,
+		"sent_at":      sentAt,
+		"created_at":   email.CreatedAt,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 // GetMenusHandler returns accessible menus for the current user
