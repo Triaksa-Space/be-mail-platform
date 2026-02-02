@@ -827,25 +827,44 @@ func GetUserMeHandler(c echo.Context) error {
 }
 
 func ListAdminUsersHandler(c echo.Context) error {
-	searchUsername := c.QueryParam("email")
+	searchUsername := strings.TrimSpace(c.QueryParam("email"))
 
-	// Get sorting parameters
+	// Validate sort fields to prevent SQL injection - use whitelist
 	sortFields := c.QueryParam("sort_fields")
-	if sortFields == "" {
-		sortFields = "last_login desc" // Default sort field
+	allowedSorts := map[string]string{
+		"last_login desc": "last_login DESC",
+		"last_login asc":  "last_login ASC",
+		"last_login_desc": "last_login DESC",
+		"last_login_asc":  "last_login ASC",
+		"email desc":      "email DESC",
+		"email asc":       "email ASC",
+		"email_desc":      "email DESC",
+		"email_asc":       "email ASC",
+		"created_at desc": "created_at DESC",
+		"created_at asc":  "created_at ASC",
+		"created_at_desc": "created_at DESC",
+		"created_at_asc":  "created_at ASC",
 	}
 
-	// Fetch paginated users
-	var users []User
-	query := "SELECT * FROM users WHERE role_id = 2 "
-	if searchUsername != "" {
-		query = query + " AND email LIKE '%" + searchUsername + "%' "
+	orderBy, ok := allowedSorts[sortFields]
+	if !ok {
+		orderBy = "last_login DESC" // Default safe value
 	}
-	query = query + " ORDER BY " + sortFields
-	err := config.DB.Select(&users,
-		query)
+
+	// Fetch paginated users with parameterized query
+	var users []User
+	var err error
+
+	if searchUsername != "" {
+		query := fmt.Sprintf("SELECT * FROM users WHERE role_id = 2 AND email LIKE ? ORDER BY %s", orderBy)
+		err = config.DB.Select(&users, query, "%"+searchUsername+"%")
+	} else {
+		query := fmt.Sprintf("SELECT * FROM users WHERE role_id = 2 ORDER BY %s", orderBy)
+		err = config.DB.Select(&users, query)
+	}
+
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
 	}
 
 	var encodeUsers []User

@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/jhillyerd/enmime"
 )
 
@@ -56,8 +56,13 @@ func ProcessAllPendingEmails() error {
 
 // ProcessAllPendingEmailsWithConfig processes emails with custom configuration
 func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
+	log := logger.Get().WithComponent("email_processor")
 	startTime := time.Now()
-	fmt.Printf("[Processor] Starting email processing at %v\n", startTime)
+
+	log.Debug("Starting email processing",
+		logger.BatchSize(cfg.BatchSize),
+		logger.Int("workers", cfg.WorkerCount),
+	)
 
 	// Fetch batch of unprocessed emails
 	var pendingEmails []IncomingEmail
@@ -70,15 +75,16 @@ func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
 	`, cfg.BatchSize)
 
 	if err != nil {
-		return fmt.Errorf("failed to fetch pending emails: %v", err)
+		log.Error("Failed to fetch pending emails", err)
+		return fmt.Errorf("failed to fetch pending emails: %w", err)
 	}
 
 	if len(pendingEmails) == 0 {
-		fmt.Println("[Processor] No pending emails to process")
+		log.Debug("No pending emails to process")
 		return nil
 	}
 
-	fmt.Printf("[Processor] Found %d pending emails to process\n", len(pendingEmails))
+	log.Info("Found pending emails to process", logger.Count(len(pendingEmails)))
 
 	// Create worker pool
 	emailChan := make(chan IncomingEmail, len(pendingEmails))
@@ -90,8 +96,9 @@ func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			workerLog := log.WithFields(logger.WorkerID(workerID))
 			for email := range emailChan {
-				result := processOneEmail(workerID, email)
+				result := processOneEmail(workerLog, workerID, email)
 				resultChan <- result
 			}
 		}(i)
@@ -117,18 +124,25 @@ func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
 			successCount++
 		} else {
 			failedCount++
-			fmt.Printf("[Processor] Failed to process email ID %d: %v\n", result.EmailID, result.Error)
+			log.Warn("Failed to process email",
+				logger.EmailID(result.EmailID),
+				logger.Err(result.Error),
+			)
 		}
 	}
 
 	duration := time.Since(startTime)
-	fmt.Printf("[Processor] Completed: %d success, %d failed in %v\n", successCount, failedCount, duration)
+	log.Info("Email processing completed",
+		logger.ProcessedCount(successCount),
+		logger.FailedCount(failedCount),
+		logger.Duration("duration_ms", duration),
+	)
 
 	return nil
 }
 
 // processOneEmail processes a single email (called by workers)
-func processOneEmail(workerID int, rawEmail IncomingEmail) ProcessResult {
+func processOneEmail(log logger.Logger, workerID int, rawEmail IncomingEmail) ProcessResult {
 	result := ProcessResult{EmailID: rawEmail.ID}
 
 	// Get user ID from email address
@@ -141,7 +155,10 @@ func processOneEmail(workerID int, rawEmail IncomingEmail) ProcessResult {
 		// User not found - mark as processed and skip
 		markEmailProcessed(rawEmail.ID)
 		result.Success = true // Not an error, just no user
-		fmt.Printf("[Worker %d] No user found for %s, skipping\n", workerID, rawEmail.EmailSendTo)
+		log.Debug("No user found for email, skipping",
+			logger.Email(rawEmail.EmailSendTo),
+			logger.EmailID(rawEmail.ID),
+		)
 		return result
 	}
 
@@ -151,8 +168,12 @@ func processOneEmail(workerID int, rawEmail IncomingEmail) ProcessResult {
 	// Parse the email content
 	env, err := enmime.ReadEnvelope(bytes.NewReader(rawEmail.EmailData))
 	if err != nil {
-		result.Error = fmt.Errorf("failed to parse email: %v", err)
+		result.Error = fmt.Errorf("failed to parse email: %w", err)
 		markEmailFailed(rawEmail.ID)
+		log.Error("Failed to parse email", err,
+			logger.EmailID(rawEmail.ID),
+			logger.MessageID(rawEmail.MessageID),
+		)
 		return result
 	}
 
@@ -180,7 +201,10 @@ func processOneEmail(workerID int, rawEmail IncomingEmail) ProcessResult {
 		attachmentKey := fmt.Sprintf("attachments/%s/%s", rawEmail.MessageID, att.FileName)
 		attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
 		if err != nil {
-			log.Printf("[Worker %d] Failed to upload attachment: %v", workerID, err)
+			log.Warn("Failed to upload attachment",
+				logger.String("filename", att.FileName),
+				logger.Err(err),
+			)
 			continue
 		}
 		attachmentURLs = append(attachmentURLs, attachmentURL)
@@ -229,24 +253,37 @@ func processOneEmail(workerID int, rawEmail IncomingEmail) ProcessResult {
 	)
 
 	if err != nil {
-		result.Error = fmt.Errorf("failed to insert email: %v", err)
+		result.Error = fmt.Errorf("failed to insert email: %w", err)
 		markEmailFailed(rawEmail.ID)
+		log.Error("Failed to insert email to database", err,
+			logger.EmailID(rawEmail.ID),
+			logger.UserID(userID),
+		)
 		return result
 	}
 
 	// Delete from incoming_emails after successful processing
 	_, err = config.DB.Exec(`DELETE FROM incoming_emails WHERE id = ?`, rawEmail.ID)
 	if err != nil {
-		log.Printf("[Worker %d] Failed to delete incoming email %d: %v", workerID, rawEmail.ID, err)
+		log.Warn("Failed to delete incoming email after processing",
+			logger.EmailID(rawEmail.ID),
+			logger.Err(err),
+		)
 	}
 
 	result.Success = true
-	fmt.Printf("[Worker %d] Processed email for %s (ID: %d)\n", workerID, rawEmail.EmailSendTo, rawEmail.ID)
+	log.Debug("Email processed successfully",
+		logger.Email(rawEmail.EmailSendTo),
+		logger.EmailID(rawEmail.ID),
+		logger.UserID(userID),
+	)
 	return result
 }
 
 // enforceEmailLimit keeps only the latest N emails for a user
 func enforceEmailLimit(userID int64, maxEmails int) {
+	log := logger.Get().WithComponent("email_limit")
+
 	var emailCount int
 	err := config.DB.Get(&emailCount, `
 		SELECT COUNT(*) FROM emails
@@ -259,7 +296,7 @@ func enforceEmailLimit(userID int64, maxEmails int) {
 
 	// Delete oldest emails to maintain limit
 	deleteCount := emailCount - maxEmails + 1 // +1 to make room for new email
-	_, err = config.DB.Exec(`
+	result, err := config.DB.Exec(`
 		DELETE FROM emails
 		WHERE id IN (
 			SELECT id FROM (
@@ -272,24 +309,50 @@ func enforceEmailLimit(userID int64, maxEmails int) {
 	`, userID, deleteCount)
 
 	if err != nil {
-		fmt.Printf("Failed to enforce email limit for user %d: %v\n", userID, err)
+		log.Warn("Failed to enforce email limit",
+			logger.UserID(userID),
+			logger.Err(err),
+		)
+		return
+	}
+
+	rowsDeleted, _ := result.RowsAffected()
+	if rowsDeleted > 0 {
+		log.Debug("Enforced email limit",
+			logger.UserID(userID),
+			logger.Int64("deleted_count", rowsDeleted),
+		)
 	}
 }
 
 // markEmailProcessed marks an email as processed without inserting
 func markEmailProcessed(emailID int64) {
-	_, _ = config.DB.Exec(`
+	_, err := config.DB.Exec(`
 		UPDATE incoming_emails SET processed = TRUE WHERE id = ?
 	`, emailID)
+	if err != nil {
+		log := logger.Get().WithComponent("email_processor")
+		log.Warn("Failed to mark email as processed",
+			logger.EmailID(emailID),
+			logger.Err(err),
+		)
+	}
 }
 
 // markEmailFailed increments retry count or marks as failed
 func markEmailFailed(emailID int64) {
 	// For now, just mark as processed to avoid infinite retries
-	// In production, you might want a retry_count column
-	_, _ = config.DB.Exec(`
+	// TODO: Add retry_count column for proper retry logic
+	_, err := config.DB.Exec(`
 		UPDATE incoming_emails SET processed = TRUE WHERE id = ?
 	`, emailID)
+	if err != nil {
+		log := logger.Get().WithComponent("email_processor")
+		log.Warn("Failed to mark email as failed",
+			logger.EmailID(emailID),
+			logger.Err(err),
+		)
+	}
 }
 
 // GetProcessingStats returns statistics about email processing

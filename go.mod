@@ -15,6 +15,7 @@ require (
 	github.com/labstack/gommon v0.4.2
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/resend/resend-go/v2 v2.13.0
+	github.com/rs/zerolog v1.31.0
 	github.com/spf13/viper v1.19.0
 	golang.org/x/crypto v0.29.0
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9
