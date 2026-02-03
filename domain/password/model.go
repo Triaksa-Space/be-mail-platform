@@ -22,7 +22,18 @@ type PasswordResetCode struct {
 
 // ForgotPasswordRequest represents the forgot password request
 type ForgotPasswordRequest struct {
-	Email string `json:"email"`
+	Email        string `json:"email"`
+	BindingEmail string `json:"binding_email"`
+}
+
+// ForgotPasswordAttempt tracks failed forgot password attempts
+type ForgotPasswordAttempt struct {
+	ID             int64        `db:"id"`
+	Email          string       `db:"email"`
+	FailedAttempts int          `db:"failed_attempts"`
+	BlockedUntil   sql.NullTime `db:"blocked_until"`
+	LastAttemptAt  time.Time    `db:"last_attempt_at"`
+	CreatedAt      time.Time    `db:"created_at"`
 }
 
 // VerifyCodeRequest represents the verify code request

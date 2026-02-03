@@ -35,34 +35,96 @@ func ForgotPasswordHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
-	// Always return the same response to prevent email enumeration
-	genericResponse := map[string]string{
-		"message": "If an account exists with this email, a verification code has been sent.",
+	// Validate required fields
+	if req.Email == "" || req.BindingEmail == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "validation_error",
+			"message": "Email and binding_email are required",
+		})
+	}
+
+	now := time.Now()
+
+	// Check if this email is currently blocked due to too many attempts
+	var attempt ForgotPasswordAttempt
+	err := config.DB.Get(&attempt, `
+		SELECT id, email, failed_attempts, blocked_until, last_attempt_at, created_at
+		FROM forgot_password_attempts
+		WHERE email = ?
+	`, req.Email)
+
+	if err == nil {
+		// Check if currently blocked
+		if attempt.BlockedUntil.Valid && attempt.BlockedUntil.Time.After(now) {
+			log.Debug("Forgot password blocked due to too many attempts", logger.Email(req.Email))
+			return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
+				"error":         "too_many_attempts",
+				"message":       "Too many failed attempts. Try again in 5 minutes.",
+				"blocked_until": attempt.BlockedUntil.Time.Format(time.RFC3339),
+			})
+		}
+
+		// Reset attempts if block period has passed
+		if attempt.BlockedUntil.Valid && attempt.BlockedUntil.Time.Before(now) {
+			_, err = config.DB.Exec(`
+				UPDATE forgot_password_attempts
+				SET failed_attempts = 0, blocked_until = NULL
+				WHERE email = ?
+			`, req.Email)
+			if err != nil {
+				log.Warn("Error resetting forgot password attempts", logger.Err(err))
+			}
+			attempt.FailedAttempts = 0
+		}
 	}
 
 	// Find user by email
 	var user User
-	err := config.DB.Get(&user, "SELECT id, email, binding_email, role_id FROM users WHERE email = ?", req.Email)
+	err = config.DB.Get(&user, "SELECT id, email, binding_email, role_id FROM users WHERE email = ?", req.Email)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			log.Debug("Password reset requested for non-existent email", logger.Email(req.Email))
-			return c.JSON(http.StatusOK, genericResponse)
+			// Return generic error to prevent email enumeration but still track attempts
+			return handleFailedForgotPasswordAttempt(c, req.Email, log)
 		}
 		log.Error("Error fetching user for password reset", err, logger.Email(req.Email))
-		return c.JSON(http.StatusOK, genericResponse)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
+
+	log = log.WithUserID(user.ID)
 
 	// Only allow role_id = 1 (User) to use forgot password
 	if user.RoleID != 1 {
-		log.Debug("Password reset attempted by non-user role", logger.UserID(user.ID), logger.Int("role_id", user.RoleID))
-		return c.JSON(http.StatusOK, genericResponse)
+		log.Debug("Password reset attempted by non-user role", logger.Int("role_id", user.RoleID))
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "invalid_credentials",
+			"message": "Invalid email or binding email",
+		})
 	}
 
-	// Check if binding_email is set
-	if !user.BindingEmail.Valid || user.BindingEmail.String == "" {
-		log.Debug("Password reset attempted without binding email", logger.UserID(user.ID))
-		return c.JSON(http.StatusOK, genericResponse)
+	// Determine expected binding email
+	var expectedBindingEmail string
+	if user.BindingEmail.Valid && user.BindingEmail.String != "" {
+		// User has a binding email set - must match
+		expectedBindingEmail = user.BindingEmail.String
+	} else {
+		// User has no binding email - binding_email must equal email
+		expectedBindingEmail = user.Email
 	}
+
+	// Validate binding email
+	if req.BindingEmail != expectedBindingEmail {
+		log.Debug("Invalid binding email provided",
+			logger.String("provided", req.BindingEmail),
+			logger.String("expected", expectedBindingEmail),
+		)
+
+		// Increment failed attempts and check for warnings/blocks
+		return handleFailedForgotPasswordAttempt(c, req.Email, log)
+	}
+
+	// Binding email validated - reset attempts counter
+	resetForgotPasswordAttempts(req.Email, log)
 
 	// Invalidate any existing codes for this user
 	_, err = config.DB.Exec(`
@@ -71,57 +133,207 @@ func ForgotPasswordHandler(c echo.Context) error {
 		WHERE user_id = ? AND used_at IS NULL
 	`, user.ID)
 	if err != nil {
-		log.Warn("Error invalidating existing reset codes", logger.UserID(user.ID), logger.Err(err))
+		log.Warn("Error invalidating existing reset codes", logger.Err(err))
 	}
 
 	// Generate 4-digit code
 	code, err := generateCode()
 	if err != nil {
-		log.Error("Error generating reset code", err, logger.UserID(user.ID))
-		return c.JSON(http.StatusOK, genericResponse)
+		log.Error("Error generating reset code", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
-	log.Debug("Generated password reset code", logger.UserID(user.ID))
+	log.Debug("Generated password reset code")
 
 	// Hash the code
 	codeHash := hashCode(code)
-	expiresAt := time.Now().Add(CodeExpiry)
+	expiresAt := now.Add(CodeExpiry)
+
+	// Determine where to send the email
+	sendToEmail := expectedBindingEmail
 
 	// Store the code
 	_, err = config.DB.Exec(`
 		INSERT INTO password_reset_codes (user_id, code_hash, binding_email, expires_at, created_at)
 		VALUES (?, ?, ?, ?, NOW())
-	`, user.ID, codeHash, user.BindingEmail.String, expiresAt)
+	`, user.ID, codeHash, sendToEmail, expiresAt)
 	if err != nil {
-		log.Error("Error storing reset code", err, logger.UserID(user.ID))
-		return c.JSON(http.StatusOK, genericResponse)
+		log.Error("Error storing reset code", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	// Send email with code
 	emailBody := fmt.Sprintf(`
-		<div style="font-family: Arial, sans-serif; padding: 20px;">
-			<h2>Password Reset Code</h2>
-			<p>You have requested to reset your password for your Mailria account.</p>
-			<p>Your verification code is:</p>
-			<div style="background-color: #f4f4f4; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0;">
-				%s
-			</div>
-			<p>This code will expire in 30 minutes.</p>
-			<p>If you did not request this password reset, please ignore this email.</p>
-			<p>Best regards,<br>Mailria Team</p>
-		</div>
-	`, code)
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mailria Password Reset</title>
+  </head>
+  <body style="margin:0; padding:0; background-color:#f9fafb;">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background-color:#f9fafb; padding:20px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="384" style="width:384px; background-color:#ffffff; border-radius:12px; box-shadow:0 6px 15px -2px rgba(16,24,40,0.08); padding:16px; font-family:Roboto, Arial, sans-serif;">
+            <tr>
+              <td style="padding-bottom:16px;">
+                <img src="https://placehold.co/112x40" width="112" height="40" alt="Mailria" style="display:block; border:0; outline:none;" />
+              </td>
+            </tr>
+            <tr>
+              <td style="color:#1f2937; font-size:18px; font-weight:600; line-height:24px; padding-bottom:12px;">
+                Hello %s,
+              </td>
+            </tr>
+            <tr>
+              <td style="color:#4b5563; font-size:14px; line-height:20px; padding-bottom:12px;">
+                You requested to reset your password. Use the verification code below to continue:
+              </td>
+            </tr>
+            <tr>
+              <td style="color:#0284c7; font-size:18px; font-weight:600; line-height:28px; padding-bottom:12px;">
+                %s
+              </td>
+            </tr>
+            <tr>
+              <td style="color:#4b5563; font-size:14px; line-height:20px; padding-bottom:12px;">
+                This code will expire in <strong>30 minutes.</strong>
+              </td>
+            </tr>
+            <tr>
+              <td style="color:#4b5563; font-size:14px; line-height:20px; padding-bottom:12px;">
+                If you didn’t request this, please ignore this email.
+              </td>
+            </tr>
+            <tr>
+              <td style="color:#4b5563; font-size:14px; line-height:20px;">
+                Thanks,<br />
+                Mailria Team
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+	`, req.Email, code)
 
 	emailFrom := viper.GetString("EMAIL_SUPPORT")
-	err = pkg.SendEmailViaResend(emailFrom, user.BindingEmail.String, "Mailria Password Reset Code", emailBody, nil)
+	err = pkg.SendEmailViaResend(emailFrom, sendToEmail, "Mailria Password Reset Code", emailBody, nil)
 	if err != nil {
-		log.Error("Error sending password reset email", err, logger.UserID(user.ID))
-		// Still return success to prevent enumeration
+		log.Error("Error sending password reset email", err)
+		// Still return success
 	} else {
-		log.Info("Password reset code sent", logger.UserID(user.ID), logger.String("binding_email", user.BindingEmail.String))
+		log.Info("Password reset code sent", logger.String("binding_email", sendToEmail))
 	}
 
-	return c.JSON(http.StatusOK, genericResponse)
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "If the email and binding email are correct, a verification code has been sent.",
+	})
+}
+
+// handleFailedForgotPasswordAttempt handles failed binding email validation
+func handleFailedForgotPasswordAttempt(c echo.Context, email string, log logger.Logger) error {
+	now := time.Now()
+
+	// Get or create attempt record
+	var attempt ForgotPasswordAttempt
+	err := config.DB.Get(&attempt, `
+		SELECT id, email, failed_attempts, blocked_until, last_attempt_at, created_at
+		FROM forgot_password_attempts
+		WHERE email = ?
+	`, email)
+
+	if err == sql.ErrNoRows {
+		// Create new attempt record
+		_, err = config.DB.Exec(`
+			INSERT INTO forgot_password_attempts (email, failed_attempts, last_attempt_at, created_at)
+			VALUES (?, 1, NOW(), NOW())
+		`, email)
+		if err != nil {
+			log.Warn("Error creating forgot password attempt", logger.Err(err))
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "invalid_credentials",
+			"message": "Invalid email or binding email",
+		})
+	}
+
+	if err != nil {
+		log.Warn("Error fetching forgot password attempts", logger.Err(err))
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "invalid_credentials",
+			"message": "Invalid email or binding email",
+		})
+	}
+
+	// Increment failed attempts
+	newAttempts := attempt.FailedAttempts + 1
+
+	// 5th attempt - block for 5 minutes
+	if newAttempts >= MaxFailedAttempts {
+		blockedUntil := now.Add(BlockDuration)
+		_, err = config.DB.Exec(`
+			UPDATE forgot_password_attempts
+			SET failed_attempts = ?, blocked_until = ?, last_attempt_at = NOW()
+			WHERE email = ?
+		`, newAttempts, blockedUntil, email)
+		if err != nil {
+			log.Warn("Error updating forgot password attempts", logger.Err(err))
+		}
+		log.Info("Forgot password blocked due to too many attempts", logger.Email(email))
+		return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
+			"error":         "too_many_attempts",
+			"message":       "Too many failed attempts. Try again in 5 minutes.",
+			"blocked_until": blockedUntil.Format(time.RFC3339),
+		})
+	}
+
+	// 4th attempt - warning
+	if newAttempts == MaxFailedAttempts-1 {
+		_, err = config.DB.Exec(`
+			UPDATE forgot_password_attempts
+			SET failed_attempts = ?, last_attempt_at = NOW()
+			WHERE email = ?
+		`, newAttempts, email)
+		if err != nil {
+			log.Warn("Error updating forgot password attempts", logger.Err(err))
+		}
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error":              "attempt_warning",
+			"message":            "One more attempt before access is blocked.",
+			"remaining_attempts": 1,
+		})
+	}
+
+	// Normal failed attempt
+	_, err = config.DB.Exec(`
+		UPDATE forgot_password_attempts
+		SET failed_attempts = ?, last_attempt_at = NOW()
+		WHERE email = ?
+	`, newAttempts, email)
+	if err != nil {
+		log.Warn("Error updating forgot password attempts", logger.Err(err))
+	}
+
+	return c.JSON(http.StatusBadRequest, map[string]string{
+		"error":   "invalid_credentials",
+		"message": "Invalid email or binding email",
+	})
+}
+
+// resetForgotPasswordAttempts resets the attempt counter after successful validation
+func resetForgotPasswordAttempts(email string, log logger.Logger) {
+	_, err := config.DB.Exec(`
+		UPDATE forgot_password_attempts
+		SET failed_attempts = 0, blocked_until = NULL
+		WHERE email = ?
+	`, email)
+	if err != nil {
+		log.Warn("Error resetting forgot password attempts", logger.Err(err))
+	}
 }
 
 // VerifyCodeHandler handles the code verification request
