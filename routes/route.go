@@ -6,6 +6,7 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/domain/content"
 	domain "github.com/Triaksa-Space/be-mail-platform/domain/domain_email"
 	"github.com/Triaksa-Space/be-mail-platform/domain/email"
+	"github.com/Triaksa-Space/be-mail-platform/domain/health"
 	"github.com/Triaksa-Space/be-mail-platform/domain/password"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/middleware"
@@ -18,13 +19,19 @@ func RegisterRoutes(e *echo.Echo) {
 	superAdminOnly := []int{0}
 	adminRoles := []int{0, 2}
 
+	// Health check routes (no auth required)
+	e.GET("/health", health.HealthHandler)
+	e.GET("/health/live", health.LivenessHandler)
+	e.GET("/health/ready", health.ReadinessHandler)
+	e.GET("/health/stats", health.StatsHandler)
+
 	// Auth routes (new refresh token flow)
 	e.POST("/login", auth.LoginHandler)
 	e.POST("/token/refresh", auth.RefreshTokenHandler)
 	e.POST("/logout", auth.LogoutHandler, middleware.JWTMiddleware)
 
-	// Legacy login route (for backward compatibility)
-	e.POST("/user/login", user.LoginHandler)
+	// Legacy login route (for backward compatibility) - uses same handler as /login
+	e.POST("/user/login", auth.LoginHandler)
 	e.POST("/email/bounce", email.HandleEmailBounceHandler)
 
 	// Password reset routes (public)

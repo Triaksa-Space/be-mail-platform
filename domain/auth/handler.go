@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/labstack/echo/v4"
 )
@@ -24,9 +26,17 @@ type User struct {
 
 // LoginHandler handles user login with refresh token support
 func LoginHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("auth")
+	requestID := logger.GetRequestIDFromContext(c)
+	log = log.WithRequestID(requestID)
+
 	req := new(LoginRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		log.Warn("Invalid login request payload", logger.Err(err))
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
 	}
 
 	now := time.Now()
@@ -51,8 +61,12 @@ func LoginHandler(c echo.Context) error {
 				VALUES (?, 0, ?)
 			`, req.Email, now)
 			if err != nil {
-				fmt.Println("Error inserting initial attempts record:", err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+				log.Error("Failed to insert initial login attempts record", err, logger.Email(req.Email))
+				return apperrors.RespondWithError(c, apperrors.NewInternal(
+					apperrors.ErrCodeDatabaseError,
+					"Internal server error",
+					err,
+				))
 			}
 
 			err = config.DB.Get(&attempts, `
@@ -61,22 +75,32 @@ func LoginHandler(c echo.Context) error {
 				WHERE username = ?
 			`, req.Email)
 			if err != nil {
-				fmt.Println("Error fetching attempts after insert:", err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+				log.Error("Failed to fetch login attempts after insert", err, logger.Email(req.Email))
+				return apperrors.RespondWithError(c, apperrors.NewInternal(
+					apperrors.ErrCodeDatabaseError,
+					"Internal server error",
+					err,
+				))
 			}
 		} else {
-			fmt.Println("Error fetching attempts:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			log.Error("Failed to fetch login attempts", err, logger.Email(req.Email))
+			return apperrors.RespondWithError(c, apperrors.NewInternal(
+				apperrors.ErrCodeDatabaseError,
+				"Internal server error",
+				err,
+			))
 		}
 	}
 
 	// Check if user is currently blocked
 	if attempts.BlockedUntil.Valid && attempts.BlockedUntil.Time.After(now) {
 		remaining := attempts.BlockedUntil.Time.Sub(now)
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": fmt.Sprintf("Account temporarily locked. Please try again in %d minutes and %d seconds.",
+		log.Warn("Login attempt while account locked", logger.Email(req.Email))
+		return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
+			apperrors.ErrCodeAccountLocked,
+			fmt.Sprintf("Account temporarily locked. Please try again in %d minutes and %d seconds.",
 				int(remaining.Minutes()), int(remaining.Seconds())%60),
-		})
+		))
 	}
 
 	// If block period has passed, reset attempts
@@ -87,8 +111,12 @@ func LoginHandler(c echo.Context) error {
 			WHERE username = ?
 		`, req.Email)
 		if err != nil {
-			fmt.Println("Error resetting attempts after block:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			log.Error("Failed to reset login attempts after block period", err, logger.Email(req.Email))
+			return apperrors.RespondWithError(c, apperrors.NewInternal(
+				apperrors.ErrCodeDatabaseError,
+				"Internal server error",
+				err,
+			))
 		}
 		attempts.FailedAttempts = 0
 		attempts.BlockedUntil.Valid = false
@@ -99,15 +127,19 @@ func LoginHandler(c echo.Context) error {
 	err = config.DB.Get(&user, "SELECT id, email, password, role_id FROM users WHERE email = ?", req.Email)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return handleFailedAttempt(c, req.Email, attempts.FailedAttempts, now)
+			return handleFailedAttempt(c, log, req.Email, attempts.FailedAttempts, now)
 		}
-		fmt.Println("Error fetching user:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to fetch user", err, logger.Email(req.Email))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Check password
 	if !utils.CheckPasswordHash(req.Password, user.Password) {
-		return handleFailedAttempt(c, req.Email, attempts.FailedAttempts, now)
+		return handleFailedAttempt(c, log, req.Email, attempts.FailedAttempts, now)
 	}
 
 	// Successful login - reset attempts
@@ -117,22 +149,34 @@ func LoginHandler(c echo.Context) error {
 		WHERE username = ?
 	`, req.Email)
 	if err != nil {
-		fmt.Println("Error resetting attempts on success:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to reset login attempts on success", err, logger.Email(req.Email))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Generate access token
 	accessToken, err := utils.GenerateAccessToken(user.ID, user.Email, user.RoleID)
 	if err != nil {
-		fmt.Println("GenerateAccessToken error:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to generate access token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Generate refresh token
 	refreshToken, err := generateRefreshToken()
 	if err != nil {
-		fmt.Println("GenerateRefreshToken error:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to generate refresh token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Calculate expiry based on remember_me
@@ -153,15 +197,25 @@ func LoginHandler(c echo.Context) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, user.ID, tokenHash, req.RememberMe, expiresAt, now, userAgent, ipAddress)
 	if err != nil {
-		fmt.Println("Error storing refresh token:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to store refresh token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Update last login time
 	_, err = config.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", now, user.ID)
 	if err != nil {
-		fmt.Println("Error updating last login:", err)
+		log.Warn("Failed to update last login time", logger.UserID(user.ID), logger.Err(err))
 	}
+
+	log.Info("User logged in successfully",
+		logger.UserID(user.ID),
+		logger.Email(user.Email),
+		logger.Bool("remember_me", req.RememberMe),
+	)
 
 	response := LoginResponse{
 		AccessToken:  accessToken,
@@ -180,13 +234,23 @@ func LoginHandler(c echo.Context) error {
 
 // RefreshTokenHandler handles token refresh requests
 func RefreshTokenHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("auth")
+	requestID := logger.GetRequestIDFromContext(c)
+	log = log.WithRequestID(requestID)
+
 	req := new(RefreshTokenRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
 	}
 
 	if req.RefreshToken == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "refresh_token is required"})
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeMissingField,
+			"refresh_token is required",
+		))
 	}
 
 	tokenHash := hashToken(req.RefreshToken)
@@ -202,61 +266,84 @@ func RefreshTokenHandler(c echo.Context) error {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"error":   "refresh_token_invalid",
-				"message": "Invalid refresh token. Please login again.",
-			})
+			log.Warn("Invalid refresh token used")
+			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+				apperrors.ErrCodeRefreshTokenInvalid,
+				"Invalid refresh token. Please login again.",
+			))
 		}
-		fmt.Println("Error fetching refresh token:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to fetch refresh token", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Check if token is revoked
 	if storedToken.RevokedAt.Valid {
 		// Token reuse detected - this could be a theft attempt
 		// Revoke all tokens for this user for security
+		log.Warn("Refresh token reuse detected - possible token theft",
+			logger.UserID(storedToken.UserID),
+		)
+
 		_, err = config.DB.Exec(`
 			UPDATE refresh_tokens
 			SET revoked_at = ?
 			WHERE user_id = ? AND revoked_at IS NULL
 		`, now, storedToken.UserID)
 		if err != nil {
-			fmt.Println("Error revoking all tokens:", err)
+			log.Error("Failed to revoke all tokens after reuse detection", err, logger.UserID(storedToken.UserID))
 		}
-		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
-			"error":   "refresh_token_reused",
-			"message": "Token reuse detected. All sessions have been revoked. Please login again.",
-		})
+
+		return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+			apperrors.ErrCodeRefreshTokenReused,
+			"Token reuse detected. All sessions have been revoked. Please login again.",
+		))
 	}
 
 	// Check if token is expired
 	if storedToken.ExpiresAt.Before(now) {
-		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
-			"error":   "refresh_token_expired",
-			"message": "Your session has expired. Please login again.",
-		})
+		log.Debug("Refresh token expired", logger.UserID(storedToken.UserID))
+		return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+			apperrors.ErrCodeRefreshTokenExpired,
+			"Your session has expired. Please login again.",
+		))
 	}
 
 	// Get user information
 	var user User
 	err = config.DB.Get(&user, "SELECT id, email, role_id FROM users WHERE id = ?", storedToken.UserID)
 	if err != nil {
-		fmt.Println("Error fetching user:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to fetch user for token refresh", err, logger.UserID(storedToken.UserID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Generate new access token
 	accessToken, err := utils.GenerateAccessToken(user.ID, user.Email, user.RoleID)
 	if err != nil {
-		fmt.Println("GenerateAccessToken error:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to generate access token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Generate new refresh token (rotation)
 	newRefreshToken, err := generateRefreshToken()
 	if err != nil {
-		fmt.Println("GenerateRefreshToken error:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to generate refresh token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Calculate new expiry - sliding expiration for remember_me
@@ -275,7 +362,12 @@ func RefreshTokenHandler(c echo.Context) error {
 	// Start transaction for token rotation
 	tx, err := config.DB.Begin()
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to start transaction for token rotation", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 	defer tx.Rollback()
 
@@ -285,8 +377,12 @@ func RefreshTokenHandler(c echo.Context) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, user.ID, newTokenHash, storedToken.RememberMe, newExpiresAt, now, userAgent, ipAddress)
 	if err != nil {
-		fmt.Println("Error inserting new refresh token:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to insert new refresh token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	newTokenID, _ := result.LastInsertId()
@@ -298,13 +394,24 @@ func RefreshTokenHandler(c echo.Context) error {
 		WHERE id = ?
 	`, now, newTokenID, storedToken.ID)
 	if err != nil {
-		fmt.Println("Error revoking old refresh token:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to revoke old refresh token", err, logger.UserID(user.ID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to commit token rotation transaction", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
+
+	log.Debug("Token refreshed successfully", logger.UserID(user.ID))
 
 	response := RefreshTokenResponse{
 		AccessToken:  accessToken,
@@ -318,7 +425,12 @@ func RefreshTokenHandler(c echo.Context) error {
 
 // LogoutHandler handles user logout
 func LogoutHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("auth")
+	requestID := logger.GetRequestIDFromContext(c)
+	log = log.WithRequestID(requestID)
+
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
 	req := new(LogoutRequest)
 	if err := c.Bind(req); err != nil {
@@ -337,9 +449,14 @@ func LogoutHandler(c echo.Context) error {
 			WHERE token_hash = ? AND user_id = ?
 		`, now, tokenHash, userID)
 		if err != nil {
-			fmt.Println("Error revoking refresh token:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			log.Error("Failed to revoke refresh token", err)
+			return apperrors.RespondWithError(c, apperrors.NewInternal(
+				apperrors.ErrCodeDatabaseError,
+				"Internal server error",
+				err,
+			))
 		}
+		log.Info("Single session logout")
 	} else {
 		// Revoke all refresh tokens for this user
 		_, err := config.DB.Exec(`
@@ -348,9 +465,14 @@ func LogoutHandler(c echo.Context) error {
 			WHERE user_id = ? AND revoked_at IS NULL
 		`, now, userID)
 		if err != nil {
-			fmt.Println("Error revoking all refresh tokens:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			log.Error("Failed to revoke all refresh tokens", err)
+			return apperrors.RespondWithError(c, apperrors.NewInternal(
+				apperrors.ErrCodeDatabaseError,
+				"Internal server error",
+				err,
+			))
 		}
+		log.Info("All sessions logout")
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Successfully logged out"})
@@ -372,7 +494,7 @@ func hashToken(token string) string {
 }
 
 // handleFailedAttempt handles failed login attempts
-func handleFailedAttempt(c echo.Context, email string, currentAttempts int, now time.Time) error {
+func handleFailedAttempt(c echo.Context, log logger.Logger, email string, currentAttempts int, now time.Time) error {
 	newAttempts := currentAttempts + 1
 
 	if newAttempts >= 4 {
@@ -383,11 +505,18 @@ func handleFailedAttempt(c echo.Context, email string, currentAttempts int, now 
 			WHERE username = ?
 		`, newAttempts, now, blockedUntil, email)
 		if err != nil {
-			fmt.Println("Error updating attempts on block:", err)
+			log.Error("Failed to update login attempts on block", err, logger.Email(email))
 		}
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Too many failed login attempts. Account locked for 5 minutes.",
-		})
+
+		log.Warn("Account locked due to too many failed attempts",
+			logger.Email(email),
+			logger.Int("attempts", newAttempts),
+		)
+
+		return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
+			apperrors.ErrCodeLoginLimitExceeded,
+			"Too many failed login attempts. Account locked for 5 minutes.",
+		))
 	} else if newAttempts == 3 {
 		_, err := config.DB.Exec(`
 			UPDATE user_login_attempts
@@ -395,11 +524,18 @@ func handleFailedAttempt(c echo.Context, email string, currentAttempts int, now 
 			WHERE username = ?
 		`, newAttempts, now, email)
 		if err != nil {
-			fmt.Println("Error updating attempts on password mismatch:", err)
+			log.Error("Failed to update login attempts", err, logger.Email(email))
 		}
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Careful! One more failed attempt will disable login for 5 minutes.",
-		})
+
+		log.Warn("Login attempt warning - one more will lock account",
+			logger.Email(email),
+			logger.Int("attempts", newAttempts),
+		)
+
+		return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
+			apperrors.ErrCodeRateLimitExceeded,
+			"Careful! One more failed attempt will disable login for 5 minutes.",
+		))
 	} else {
 		_, err := config.DB.Exec(`
 			UPDATE user_login_attempts
@@ -407,17 +543,38 @@ func handleFailedAttempt(c echo.Context, email string, currentAttempts int, now 
 			WHERE username = ?
 		`, newAttempts, now, email)
 		if err != nil {
-			fmt.Println("Error updating attempts on password mismatch:", err)
+			log.Error("Failed to update login attempts", err, logger.Email(email))
 		}
+
+		log.Debug("Failed login attempt",
+			logger.Email(email),
+			logger.Int("attempts", newAttempts),
+		)
 	}
-	return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
+
+	return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+		apperrors.ErrCodeInvalidCredentials,
+		"Invalid email or password",
+	))
 }
 
 // CleanupExpiredTokens removes expired refresh tokens (call via cron job)
 func CleanupExpiredTokens() error {
-	_, err := config.DB.Exec(`
+	log := logger.Get().WithComponent("auth")
+
+	result, err := config.DB.Exec(`
 		DELETE FROM refresh_tokens
 		WHERE expires_at < NOW() OR revoked_at IS NOT NULL
 	`)
-	return err
+	if err != nil {
+		log.Error("Failed to cleanup expired tokens", err)
+		return err
+	}
+
+	rowsDeleted, _ := result.RowsAffected()
+	if rowsDeleted > 0 {
+		log.Info("Cleaned up expired tokens", logger.Int64("deleted_count", rowsDeleted))
+	}
+
+	return nil
 }

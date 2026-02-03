@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,6 +20,7 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/google/uuid"
 
@@ -64,7 +64,8 @@ func DeductEmailLimit(userID int64) error {
 }
 
 func HandleEmailBounceHandler(c echo.Context) error {
-	// Bind the JSON payload to the struct
+	log := logger.Get().WithComponent("email_bounce")
+
 	var payload WebhookPayload
 	if err := c.Bind(&payload); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
@@ -72,18 +73,20 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		})
 	}
 
-	// Process the data (e.g., log the bounce, update the database, etc.)
-	// For demonstration, we'll just print the payload
-	fmt.Printf("Received webhook payload: %+v\n", payload)
-	// fmt.Println("payload.Data.From", payload.Data.From)
+	log.Info("Received email bounce webhook",
+		logger.String("type", payload.Type),
+		logger.String("email_id", payload.Data.EmailID),
+		logger.String("from", payload.Data.From),
+	)
+
 	userID, err := getUserByEmail(payload.Data.From)
 	if err != nil {
+		log.Warn("Failed to fetch user by email", logger.Email(payload.Data.From), logger.Err(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
 	}
 
-	// SEND EMAIL TO SENDER using EMAIL_SUPPORT
 	emailSupport := viper.GetString("EMAIL_SUPPORT")
 	nameSupport := viper.GetString("NAME_SUPPORT")
 
@@ -94,11 +97,10 @@ func HandleEmailBounceHandler(c echo.Context) error {
 
 	err = process10Emails(int64(userID), payload.Data.From)
 	if err != nil {
-		fmt.Println("Failed to process incoming emails", err)
+		log.Warn("Failed to process incoming emails", logger.Err(err))
 	}
-	fmt.Println("Finish refresh internal mailbox")
+	log.Debug("Finished refresh internal mailbox")
 
-	// TODO: MAKE STANDARD BOUNCE EMAIL
 	sendTo := ""
 	notificationSubject := ""
 	notificationBody := ""
@@ -107,9 +109,7 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		sendTo = payload.Data.To[0]
 	}
 
-	// Check if bounce is 'address not found'
 	if payload.Type == "email.bounced" {
-		// Send custom notification email to sender
 		notificationSubject = "Bounce Notification: Address Not Found"
 		notificationBody = fmt.Sprintf(`
             <p>Your email to %s failed to deliver because the address was not found.</p>
@@ -128,29 +128,22 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		}
 	}
 
-	// Normalize the datetime string
 	normalizedTimeStr := strings.Replace(payload.Data.CreatedAt, " ", "T", 1)
 	if strings.HasSuffix(normalizedTimeStr, "+00") || strings.HasSuffix(normalizedTimeStr, "-00") {
 		normalizedTimeStr += ":00"
 	}
 
-	// Define a layout matching the normalized datetime string
 	const layout = "2006-01-02T15:04:05.999999-07:00"
-
-	// Parse the datetime string to a time.Time object
 	timestamp, err := time.Parse(layout, normalizedTimeStr)
 	if err != nil {
-		fmt.Printf("Failed to parse datetime: %v\n", err)
+		log.Error("Failed to parse datetime", err, logger.String("datetime", payload.Data.CreatedAt))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to parse datetime",
 		})
 	}
 
-	// Format the time.Time object to a MySQL-compatible datetime string
 	formattedTimestamp := timestamp.Format("2006-01-02 15:04:05")
 
-	// Insert into user email that his email failed to send
-	// Insert the processed email into the emails table
 	_, err = config.DB.Exec(`
 	INSERT INTO emails (
 		user_id,
@@ -173,19 +166,22 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		notificationSubject,
 		preview,
 		notificationBody,
-		"inbox", // Set email_type as needed
+		"inbox",
 		"",
 		payload.Data.EmailID,
 		formattedTimestamp,
 	)
 	if err != nil {
-		fmt.Printf("Failed to insert email %s into DB: %v\n", payload.Data.EmailID, err)
+		log.Error("Failed to insert bounce email into DB", err,
+			logger.String("email_id", payload.Data.EmailID),
+			logger.UserID(int64(userID)),
+		)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to insert bounce email into DB" + err.Error(),
 		})
 	}
 
-	// Return a success response
+	log.Info("Email bounce processed successfully", logger.String("email_id", payload.Data.EmailID))
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email bounce notification received",
 	})
@@ -284,24 +280,25 @@ func DeleteUrlAttachmentHandler(c echo.Context) error {
 
 // SendEmailUrlAttachmentHandler handles sending emails with attachment URLs
 func SendEmailUrlAttachmentHandler(c echo.Context) error {
-	// Get user ID and email from context
+	log := logger.Get().WithComponent("email_send")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
 	emailUser, err := getUserEmail(userID)
 	if err != nil {
+		log.Error("Failed to fetch user email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
 	}
 
-	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
+		log.Warn("Email limit exceeded", logger.Email(emailUser))
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
 			"error": "Email limit exceeded",
 		})
 	}
 
-	// Parse JSON payload
 	var req SendEmailRequestURLAttachment
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
@@ -309,34 +306,28 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 		})
 	}
 
-	// Prepare attachments
 	var attachments []pkg.Attachment
 	for _, url := range req.Attachments {
-		// Extract filename from URL
 		parts := strings.Split(url, "/")
 		filename := parts[len(parts)-1]
 
 		attachments = append(attachments, pkg.Attachment{
 			Filename:    filename,
-			ContentType: "application/octet-stream", // Default content type
-			Content:     nil,                        // Content is not needed for URL attachments
+			ContentType: "application/octet-stream",
+			Content:     nil,
 			URL:         url,
 		})
 	}
 
-	// Send email via pkg/aws
 	err = pkg.SendEmailWithAttachmentURL(req.To, emailUser, req.Subject, req.Body, attachments)
 	if err != nil {
-		fmt.Println("Failed to send email", err)
+		log.Error("Failed to send email", err, logger.String("to", req.To))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
 		})
 	}
 
-	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(req.Attachments)
-
-	// Generate preview
 	preview := generatePreview("", req.Body)
 	if len(preview) > 500 {
 		preview = preview[:500]
@@ -359,21 +350,18 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'ses', 'sent', NOW(), NOW())`,
 		userID, emailUser, req.To, req.Subject, preview, req.Body, attachmentsJSON)
 	if err != nil {
-		fmt.Println("Email sent but failed to save to sent_emails:", err)
+		log.Warn("Email sent but failed to save to sent_emails", logger.Err(err))
 	}
 
-	// Update last login
-	err = updateLastLogin(userID)
-	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+	if err := updateLastLogin(userID); err != nil {
+		log.Warn("Failed to update last login", logger.Err(err))
 	}
 
-	// Update limit if sent Email success
-	err = updateLimitSentEmails(userID)
-	if err != nil {
-		fmt.Println("error updateLimitSentEmails", err)
+	if err := updateLimitSentEmails(userID); err != nil {
+		log.Warn("Failed to update sent email limit", logger.Err(err))
 	}
 
+	log.Info("Email sent successfully", logger.String("to", req.To), logger.String("subject", req.Subject))
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
@@ -381,29 +369,29 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 
 // SendEmailHandler handles sending emails with attachments
 func SendEmailHandler(c echo.Context) error {
-	// Get user ID and email from context
+	log := logger.Get().WithComponent("email_send")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
 	emailUser, err := getUserEmail(userID)
 	if err != nil {
+		log.Error("Failed to fetch user email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
 	}
 
-	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
+		log.Warn("Email limit exceeded", logger.Email(emailUser))
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
 			"error": "Email limit exceeded",
 		})
 	}
 
-	// Parse form data
 	to := c.FormValue("to")
 	subject := c.FormValue("subject")
 	body := c.FormValue("body")
 
-	// Prepare attachments and upload to S3
 	var attachments []pkg.Attachment
 	var attachmentURLs []string
 
@@ -418,6 +406,7 @@ func SendEmailHandler(c echo.Context) error {
 	for _, file := range files {
 		src, err := file.Open()
 		if err != nil {
+			log.Error("Failed to open attachment", err, logger.String("filename", file.Filename))
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Failed to open attachment",
 			})
@@ -426,19 +415,16 @@ func SendEmailHandler(c echo.Context) error {
 
 		content, err := io.ReadAll(src)
 		if err != nil {
+			log.Error("Failed to read attachment", err, logger.String("filename", file.Filename))
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Failed to read attachment",
 			})
 		}
 
-		// Convert filename to lowercase and replace spaces with underscores
 		filename := strings.ToLower(file.Filename)
 		filename = strings.ReplaceAll(filename, " ", "_")
-
-		// Append the attachment URL to the list
 		attachmentURLs = append(attachmentURLs, filename)
 
-		// Prepare the attachment for sending email
 		attachments = append(attachments, pkg.Attachment{
 			Filename:    filename,
 			ContentType: file.Header.Get("Content-Type"),
@@ -446,19 +432,15 @@ func SendEmailHandler(c echo.Context) error {
 		})
 	}
 
-	// Send email via pkg/aws
 	err = pkg.SendEmail(to, emailUser, subject, body, attachments)
 	if err != nil {
-		fmt.Println("Failed to send email", err)
+		log.Error("Failed to send email", err, logger.String("to", to))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
 		})
 	}
 
-	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
-
-	// Generate preview
 	preview := generatePreview("", body)
 	if len(preview) > 500 {
 		preview = preview[:500]
@@ -481,21 +463,18 @@ func SendEmailHandler(c echo.Context) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'ses', 'sent', NOW(), NOW())`,
 		userID, emailUser, to, subject, preview, body, attachmentsJSON)
 	if err != nil {
-		fmt.Println("Email sent but failed to save to sent_emails:", err)
+		log.Warn("Email sent but failed to save to sent_emails", logger.Err(err))
 	}
 
-	// Update last login
-	err = updateLastLogin(userID)
-	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+	if err := updateLastLogin(userID); err != nil {
+		log.Warn("Failed to update last login", logger.Err(err))
 	}
 
-	// Update limit if sent Email success
-	err = updateLimitSentEmails(userID)
-	if err != nil {
-		fmt.Println("error updateLimitSentEmails", err)
+	if err := updateLimitSentEmails(userID); err != nil {
+		log.Warn("Failed to update sent email limit", logger.Err(err))
 	}
 
+	log.Info("Email sent successfully", logger.String("to", to), logger.String("subject", subject))
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
@@ -2060,7 +2039,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
 				attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
 				if err != nil {
-					log.Printf("Failed to upload attachment: %v", err)
+					fmt.Printf("Failed to upload attachment: %v\n", err)
 					continue
 				}
 
@@ -2357,7 +2336,7 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 			attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
 			attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
 			if err != nil {
-				log.Printf("Failed to upload attachment: %v", err)
+				fmt.Printf("Failed to upload attachment: %v\n", err)
 				continue
 			}
 			attachmentURLs = append(attachmentURLs, attachmentURL)

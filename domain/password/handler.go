@@ -12,6 +12,7 @@ import (
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -27,6 +28,8 @@ type User struct {
 
 // ForgotPasswordHandler handles the forgot password request
 func ForgotPasswordHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("password_reset")
+
 	req := new(ForgotPasswordRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -42,19 +45,22 @@ func ForgotPasswordHandler(c echo.Context) error {
 	err := config.DB.Get(&user, "SELECT id, email, binding_email, role_id FROM users WHERE email = ?", req.Email)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Debug("Password reset requested for non-existent email", logger.Email(req.Email))
 			return c.JSON(http.StatusOK, genericResponse)
 		}
-		fmt.Println("Error fetching user:", err)
+		log.Error("Error fetching user for password reset", err, logger.Email(req.Email))
 		return c.JSON(http.StatusOK, genericResponse)
 	}
 
 	// Only allow role_id = 1 (User) to use forgot password
 	if user.RoleID != 1 {
+		log.Debug("Password reset attempted by non-user role", logger.UserID(user.ID), logger.Int("role_id", user.RoleID))
 		return c.JSON(http.StatusOK, genericResponse)
 	}
 
 	// Check if binding_email is set
 	if !user.BindingEmail.Valid || user.BindingEmail.String == "" {
+		log.Debug("Password reset attempted without binding email", logger.UserID(user.ID))
 		return c.JSON(http.StatusOK, genericResponse)
 	}
 
@@ -65,17 +71,17 @@ func ForgotPasswordHandler(c echo.Context) error {
 		WHERE user_id = ? AND used_at IS NULL
 	`, user.ID)
 	if err != nil {
-		fmt.Println("Error invalidating existing codes:", err)
+		log.Warn("Error invalidating existing reset codes", logger.UserID(user.ID), logger.Err(err))
 	}
 
 	// Generate 4-digit code
 	code, err := generateCode()
 	if err != nil {
-		fmt.Println("Error generating code:", err)
+		log.Error("Error generating reset code", err, logger.UserID(user.ID))
 		return c.JSON(http.StatusOK, genericResponse)
 	}
 
-	fmt.Println("code forgot passsword", code)
+	log.Debug("Generated password reset code", logger.UserID(user.ID))
 
 	// Hash the code
 	codeHash := hashCode(code)
@@ -87,7 +93,7 @@ func ForgotPasswordHandler(c echo.Context) error {
 		VALUES (?, ?, ?, ?, NOW())
 	`, user.ID, codeHash, user.BindingEmail.String, expiresAt)
 	if err != nil {
-		fmt.Println("Error storing reset code:", err)
+		log.Error("Error storing reset code", err, logger.UserID(user.ID))
 		return c.JSON(http.StatusOK, genericResponse)
 	}
 
@@ -109,8 +115,10 @@ func ForgotPasswordHandler(c echo.Context) error {
 	emailFrom := viper.GetString("EMAIL_SUPPORT")
 	err = pkg.SendEmailViaResend(emailFrom, user.BindingEmail.String, "Mailria Password Reset Code", emailBody, nil)
 	if err != nil {
-		fmt.Println("Error sending email:", err)
+		log.Error("Error sending password reset email", err, logger.UserID(user.ID))
 		// Still return success to prevent enumeration
+	} else {
+		log.Info("Password reset code sent", logger.UserID(user.ID), logger.String("binding_email", user.BindingEmail.String))
 	}
 
 	return c.JSON(http.StatusOK, genericResponse)
@@ -118,6 +126,8 @@ func ForgotPasswordHandler(c echo.Context) error {
 
 // VerifyCodeHandler handles the code verification request
 func VerifyCodeHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("password_verify")
+
 	req := new(VerifyCodeRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -134,14 +144,18 @@ func VerifyCodeHandler(c echo.Context) error {
 	var user User
 	err := config.DB.Get(&user, "SELECT id, email, binding_email, role_id FROM users WHERE email = ?", req.Email)
 	if err != nil {
+		log.Debug("Verify code attempted for unknown user", logger.Email(req.Email))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
 			"message": "Invalid or expired verification code",
 		})
 	}
 
+	log = log.WithUserID(user.ID)
+
 	// Only allow role_id = 1 (User)
 	if user.RoleID != 1 {
+		log.Debug("Verify code attempted by non-user role", logger.Int("role_id", user.RoleID))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
 			"message": "Invalid or expired verification code",
@@ -161,12 +175,13 @@ func VerifyCodeHandler(c echo.Context) error {
 	`, user.ID)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Debug("No valid reset code found")
 			return c.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error":   "invalid_code",
 				"message": "Invalid or expired verification code",
 			})
 		}
-		fmt.Println("Error fetching reset code:", err)
+		log.Error("Error fetching reset code", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
@@ -202,7 +217,7 @@ func VerifyCodeHandler(c echo.Context) error {
 				WHERE id = ?
 			`, newAttempts, blockedUntil, resetCode.ID)
 			if err != nil {
-				fmt.Println("Error updating failed attempts:", err)
+				log.Warn("Error updating failed attempts", logger.Err(err))
 			}
 			return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
 				"error":         "too_many_attempts",
@@ -219,7 +234,7 @@ func VerifyCodeHandler(c echo.Context) error {
 				WHERE id = ?
 			`, newAttempts, resetCode.ID)
 			if err != nil {
-				fmt.Println("Error updating failed attempts:", err)
+				log.Warn("Error updating failed attempts", logger.Err(err))
 			}
 			return c.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error":              "attempt_warning",
@@ -235,7 +250,7 @@ func VerifyCodeHandler(c echo.Context) error {
 			WHERE id = ?
 		`, newAttempts, resetCode.ID)
 		if err != nil {
-			fmt.Println("Error updating failed attempts:", err)
+			log.Warn("Error updating failed attempts", logger.Err(err))
 		}
 
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
@@ -247,7 +262,7 @@ func VerifyCodeHandler(c echo.Context) error {
 	// Code is valid - generate reset token
 	resetToken, err := generateResetToken()
 	if err != nil {
-		fmt.Println("Error generating reset token:", err)
+		log.Error("Error generating reset token", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
@@ -258,10 +273,11 @@ func VerifyCodeHandler(c echo.Context) error {
 		WHERE id = ?
 	`, resetToken, resetCode.ID)
 	if err != nil {
-		fmt.Println("Error updating verified status:", err)
+		log.Error("Error updating verified status", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
+	log.Info("Password reset code verified successfully")
 	return c.JSON(http.StatusOK, VerifyCodeResponse{
 		Message:    "Code verified successfully",
 		ResetToken: resetToken,
@@ -270,6 +286,8 @@ func VerifyCodeHandler(c echo.Context) error {
 
 // ResetPasswordHandler handles the password reset request
 func ResetPasswordHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("password_reset")
+
 	req := new(ResetPasswordRequest)
 	if err := c.Bind(req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -294,14 +312,18 @@ func ResetPasswordHandler(c echo.Context) error {
 	var user User
 	err := config.DB.Get(&user, "SELECT id, email, role_id FROM users WHERE email = ?", req.Email)
 	if err != nil {
+		log.Debug("Password reset attempted for unknown user", logger.Email(req.Email))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_token",
 			"message": "Invalid or expired reset token",
 		})
 	}
 
+	log = log.WithUserID(user.ID)
+
 	// Only allow role_id = 1 (User)
 	if user.RoleID != 1 {
+		log.Debug("Password reset attempted by non-user role", logger.Int("role_id", user.RoleID))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_token",
 			"message": "Invalid or expired reset token",
@@ -321,17 +343,19 @@ func ResetPasswordHandler(c echo.Context) error {
 	`, user.ID, req.ResetToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Debug("Invalid or expired reset token")
 			return c.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error":   "invalid_token",
 				"message": "Invalid or expired reset token",
 			})
 		}
-		fmt.Println("Error fetching reset code:", err)
+		log.Error("Error fetching reset code", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	// Check if reset token is expired (10 minutes after verification)
 	if resetCode.VerifiedAt.Valid && now.Sub(resetCode.VerifiedAt.Time) > ResetTokenExpiry {
+		log.Debug("Reset token expired")
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_token",
 			"message": "Invalid or expired reset token",
@@ -341,13 +365,14 @@ func ResetPasswordHandler(c echo.Context) error {
 	// Hash the new password
 	hashedPassword, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
-		fmt.Println("Error hashing password:", err)
+		log.Error("Error hashing password", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
 	// Start transaction
 	tx, err := config.DB.Begin()
 	if err != nil {
+		log.Error("Error starting transaction", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 	defer tx.Rollback()
@@ -359,7 +384,7 @@ func ResetPasswordHandler(c echo.Context) error {
 		WHERE id = ?
 	`, hashedPassword, user.ID)
 	if err != nil {
-		fmt.Println("Error updating password:", err)
+		log.Error("Error updating password", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
@@ -370,7 +395,7 @@ func ResetPasswordHandler(c echo.Context) error {
 		WHERE id = ?
 	`, resetCode.ID)
 	if err != nil {
-		fmt.Println("Error marking code as used:", err)
+		log.Error("Error marking code as used", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
@@ -381,14 +406,16 @@ func ResetPasswordHandler(c echo.Context) error {
 		WHERE user_id = ? AND revoked_at IS NULL
 	`, user.ID)
 	if err != nil {
-		fmt.Println("Error revoking refresh tokens:", err)
+		log.Warn("Error revoking refresh tokens", logger.Err(err))
 		// Don't fail the request, just log
 	}
 
 	if err := tx.Commit(); err != nil {
+		log.Error("Error committing transaction", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
+	log.Info("Password reset completed successfully")
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Password reset successfully",
 	})

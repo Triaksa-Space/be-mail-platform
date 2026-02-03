@@ -13,6 +13,8 @@ import (
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/spf13/viper"
 
@@ -20,275 +22,107 @@ import (
 	"golang.org/x/exp/rand"
 )
 
-type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-func LoginHandler(c echo.Context) error {
-	req := new(LoginRequest)
-	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-	}
-
-	now := time.Now()
-
-	// Get user attempts info
-	type AttemptsInfo struct {
-		FailedAttempts int          `db:"failed_attempts"`
-		BlockedUntil   sql.NullTime `db:"blocked_until"`
-	}
-	var attempts AttemptsInfo
-
-	err := config.DB.Get(&attempts, `
-		SELECT failed_attempts, blocked_until 
-		FROM user_login_attempts
-		WHERE username = ?
-	`, req.Email)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// If no record found, create a default entry with zero attempts
-			_, err = config.DB.Exec(`
-				INSERT INTO user_login_attempts (username, failed_attempts, last_attempt_time)
-				VALUES (?, 0, ?)
-			`, req.Email, now)
-			if err != nil {
-				fmt.Println("Error inserting initial attempts record:", err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-			}
-
-			// Refresh attempts info after insert
-			err = config.DB.Get(&attempts, `
-				SELECT failed_attempts, blocked_until 
-				FROM user_login_attempts
-				WHERE username = ?
-			`, req.Email)
-			if err != nil {
-				fmt.Println("Error fetching attempts after insert:", err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-			}
-		} else {
-			fmt.Println("Error fetching attempts:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-		}
-	}
-
-	// Check if user is currently blocked
-	if attempts.BlockedUntil.Valid && attempts.BlockedUntil.Time.After(now) {
-		remaining := attempts.BlockedUntil.Time.Sub(now)
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": fmt.Sprintf("Account temporarily locked. Please try again in %d minutes and %d seconds.",
-				int(remaining.Minutes()), int(remaining.Seconds())%60),
-		})
-	}
-
-	// If block period has passed, reset attempts
-	if attempts.BlockedUntil.Valid && attempts.BlockedUntil.Time.Before(now) {
-		_, err = config.DB.Exec(`
-			UPDATE user_login_attempts
-			SET failed_attempts = 0, blocked_until = NULL
-			WHERE username = ?
-		`, req.Email)
-		if err != nil {
-			fmt.Println("Error resetting attempts after block:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-		}
-		attempts.FailedAttempts = 0
-		attempts.BlockedUntil.Valid = false
-	}
-
-	// Fetch user from the database
-	var user User
-	err = config.DB.Get(&user, "SELECT * FROM users WHERE email = ?", req.Email)
-	if err != nil {
-		fmt.Println("Error fetching user:", err)
-		if err == sql.ErrNoRows {
-			// User not found or password mismatch: increment failed attempts
-			attempts.FailedAttempts++
-			if attempts.FailedAttempts >= 4 {
-				// Block user for 5 minutes
-				blockedUntil := now.Add(5 * time.Minute)
-				_, updateErr := config.DB.Exec(`
-					UPDATE user_login_attempts
-					SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
-					WHERE username = ?
-				`, attempts.FailedAttempts, now, blockedUntil, req.Email)
-				if updateErr != nil {
-					fmt.Println("Error updating attempts on block:", updateErr)
-				}
-				return c.JSON(http.StatusTooManyRequests, map[string]string{
-					"error": "Too many failed login attempts. Account locked for 5 minutes.",
-				})
-			} else {
-				// Just update the count
-				_, updateErr := config.DB.Exec(`
-					UPDATE user_login_attempts
-					SET failed_attempts = ?, last_attempt_time = ?
-					WHERE username = ?
-				`, attempts.FailedAttempts, now, req.Email)
-				if updateErr != nil {
-					fmt.Println("Error updating attempts on failure:", updateErr)
-				}
-			}
-			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
-		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-	}
-
-	// Check password
-	if !utils.CheckPasswordHash(req.Password, user.Password) {
-		// Password mismatch: increment failed attempts
-		attempts.FailedAttempts++
-		if attempts.FailedAttempts >= 4 {
-			// Block user for 5 minutes
-			blockedUntil := now.Add(5 * time.Minute)
-			_, updateErr := config.DB.Exec(`
-				UPDATE user_login_attempts
-				SET failed_attempts = ?, last_attempt_time = ?, blocked_until = ?
-				WHERE username = ?
-			`, attempts.FailedAttempts, now, blockedUntil, req.Email)
-			if updateErr != nil {
-				fmt.Println("Error updating attempts on block:", updateErr)
-			}
-			return c.JSON(http.StatusTooManyRequests, map[string]string{
-				"error": "Too many failed login attempts. Account locked for 5 minutes.",
-			})
-		} else if attempts.FailedAttempts == 3 {
-			// Just update the attempts count
-			_, updateErr := config.DB.Exec(`
-				UPDATE user_login_attempts
-				SET failed_attempts = ?, last_attempt_time = ?
-				WHERE username = ?
-			`, attempts.FailedAttempts, now, req.Email)
-			if updateErr != nil {
-				fmt.Println("Error updating attempts on password mismatch:", updateErr)
-			}
-			return c.JSON(http.StatusTooManyRequests, map[string]string{
-				"error": "Careful! One more failed attempt will disable login for 5 minutes.",
-			})
-		} else {
-			// Just update the attempts count
-			_, updateErr := config.DB.Exec(`
-				UPDATE user_login_attempts
-				SET failed_attempts = ?, last_attempt_time = ?
-				WHERE username = ?
-			`, attempts.FailedAttempts, now, req.Email)
-			if updateErr != nil {
-				fmt.Println("Error updating attempts on password mismatch:", updateErr)
-			}
-		}
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
-	}
-
-	// Successful login - reset attempts
-	_, err = config.DB.Exec(`
-		UPDATE user_login_attempts
-		SET failed_attempts = 0, blocked_until = NULL
-		WHERE username = ?
-	`, req.Email)
-	if err != nil {
-		fmt.Println("Error resetting attempts on success:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-	}
-
-	token, err := utils.GenerateJWT(user.ID, user.Email, user.RoleID)
-	if err != nil {
-		fmt.Println("GenerateJWT error:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-	}
-
-	// Update last login time
-	err = updateLastLogin(user.ID)
-	if err != nil {
-		fmt.Println("error updateLastLogin:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-	}
-
-	return c.JSON(http.StatusOK, map[string]string{"token": token})
-}
-
-func LogoutHandler(c echo.Context) error {
-	// Assuming JWT middleware has already validated the token
-	return c.JSON(http.StatusOK, map[string]string{"message": "Logout successful"})
-}
+// NOTE: LoginHandler and LogoutHandler have been moved to domain/auth package
+// Use auth.LoginHandler for /login and /user/login routes
 
 func ChangePasswordAdminHandler(c echo.Context) error {
-	// Extract user ID from JWT (set by JWT middleware)
+	log := logger.Get().WithComponent("user")
 	superAdminID := c.Get("user_id").(int64)
+	log = log.WithUserID(superAdminID)
 
 	_, err := getUserAdminByID(superAdminID)
 	if err != nil {
-		fmt.Println("Access Denied")
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Access Denied."})
+		log.Warn("Access denied - not an admin")
+		return apperrors.RespondWithError(c, apperrors.NewForbidden(
+			apperrors.ErrCodeForbidden,
+			"Access Denied",
+		))
 	}
 
-	// Bind request body
 	req := new(AdminChangePasswordRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
 	}
 
 	if req.UserID == 0 {
 		req.UserID = int(superAdminID)
 	}
 
-	// Fetch user data from the database
 	var hashedPassword string
 	err = config.DB.Get(&hashedPassword, "SELECT password FROM users WHERE id = ?", req.UserID)
 	if err != nil {
-		fmt.Println("error fetch user data", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to fetch user password", err, logger.Int("target_user_id", req.UserID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	if req.UserID != 0 && req.OldPassword != "" {
-		// Check if the old password is correct
 		if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
-			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
+			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+				apperrors.ErrCodeInvalidPassword,
+				"The password you entered is incorrect",
+			))
 		}
 
-		// Check if the new password is the same as the old password
 		if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
+			return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+				apperrors.ErrCodeValidationFailed,
+				"The new password cannot be the same as the old password",
+			))
 		}
 	}
 
-	// Hash the new password
 	newHashedPassword, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to hash new password", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
-	// Update the user's password in the database
 	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, req.UserID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to update password", err, logger.Int("target_user_id", req.UserID))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
-	// Update last login
-	err = updateLastLogin(superAdminID)
-	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+	if err := updateLastLogin(superAdminID); err != nil {
+		log.Warn("Failed to update last login", logger.Err(err))
 	}
 
+	log.Info("Admin password changed successfully", logger.Int("target_user_id", req.UserID))
 	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
 }
 
 func ChangePasswordHandler(c echo.Context) error {
-	// Extract user ID from JWT (set by JWT middleware)
+	log := logger.Get().WithComponent("user")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
-	// Bind request body
 	req := new(ChangePasswordRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
 	}
 
 	if req.UserID == 0 {
 		req.UserID = int(userID)
 	}
 
-	// Fetch user data from the database
 	var user struct {
 		HashedPassword string     `db:"password"`
 		FailedAttempts int        `db:"failed_attempts"`
@@ -296,29 +130,39 @@ func ChangePasswordHandler(c echo.Context) error {
 	}
 
 	err := config.DB.Get(&user, `
-        SELECT password, failed_attempts, last_failed_at 
+        SELECT password, failed_attempts, last_failed_at
         FROM users WHERE id = ?`, req.UserID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to fetch user data for password change", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	maxAttempts := 5
 	blockDuration := time.Hour
-	// Check if account is temporarily blocked
 	if user.FailedAttempts >= maxAttempts && user.LastFailedAt != nil {
 		if time.Since(*user.LastFailedAt) < blockDuration {
-			return c.JSON(http.StatusTooManyRequests, map[string]string{
-				"error": "Account is temporarily locked. Please try again later.",
-			})
+			log.Warn("Password change blocked - too many failed attempts")
+			return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
+				apperrors.ErrCodeRateLimitExceeded,
+				"Account is temporarily locked. Please try again later.",
+			))
 		} else {
-			// Reset failed attempts if blocking period has passed
 			_, err = config.DB.Exec(`
-                UPDATE users 
-                SET failed_attempts = 0, 
-                    last_failed_at = NULL 
+                UPDATE users
+                SET failed_attempts = 0,
+                    last_failed_at = NULL
                 WHERE id = ?`, req.UserID)
 			if err != nil {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+				log.Error("Failed to reset failed attempts", err)
+				return apperrors.RespondWithError(c, apperrors.NewInternal(
+					apperrors.ErrCodeDatabaseError,
+					"Internal server error",
+					err,
+				))
 			}
 			user.FailedAttempts = 0
 			user.LastFailedAt = nil
@@ -326,136 +170,159 @@ func ChangePasswordHandler(c echo.Context) error {
 	}
 
 	if req.OldPassword != "" {
-		// Check if the old password is correct
 		if !utils.CheckPasswordHash(req.OldPassword, user.HashedPassword) {
-			fmt.Println("error CheckPasswordHash", err)
+			log.Debug("Incorrect old password provided")
 
-			// Increment failed attempts
 			_, err = config.DB.Exec(`
-                UPDATE users 
-                SET failed_attempts = failed_attempts + 1, 
-                    last_failed_at = NOW() 
+                UPDATE users
+                SET failed_attempts = failed_attempts + 1,
+                    last_failed_at = NOW()
                 WHERE id = ?`, req.UserID)
 			if err != nil {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+				log.Error("Failed to increment failed attempts", err)
 			}
 
-			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "The password you entered is incorrect."})
+			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+				apperrors.ErrCodeInvalidPassword,
+				"The password you entered is incorrect",
+			))
 		}
 
-		// Check if the new password is the same as the old password
 		if utils.CheckPasswordHash(req.NewPassword, user.HashedPassword) {
-			fmt.Println("error CheckPasswordHash", err)
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "The new password cannot be the same as the old password."})
+			return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+				apperrors.ErrCodeValidationFailed,
+				"The new password cannot be the same as the old password",
+			))
 		}
 	}
 
-	// Hash the new password
 	newHashedPassword, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
-		fmt.Println("error HashPassword", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to hash new password", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
 	// Update the user's password and reset failed attempts
 	_, err = config.DB.Exec(`
-        UPDATE users 
-        SET password = ?, 
-            failed_attempts = 0, 
+        UPDATE users
+        SET password = ?,
+            failed_attempts = 0,
             last_failed_at = NULL,
-            updated_at = NOW() 
+            updated_at = NOW()
         WHERE id = ?`, newHashedPassword, req.UserID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		log.Error("Failed to update password in database", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error",
+			err,
+		))
 	}
 
-	// Update last login
-	err = updateLastLogin(userID)
-	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+	if err := updateLastLogin(userID); err != nil {
+		log.Warn("Failed to update last login", logger.Err(err))
 	}
 
+	log.Info("Password changed successfully")
 	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
 }
 
 func CreateUserAdminHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("user")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
+
 	req := new(CreateAdminRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
 	}
 
 	userName, err := getUserSuperAdminByID(userID)
 	if err != nil {
-		fmt.Println("error getUserSuperAdminByID", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to verify super admin", err)
+		return apperrors.RespondWithError(c, apperrors.NewForbidden(
+			apperrors.ErrCodeForbidden,
+			"Access denied",
+		))
 	}
 
-	// if err := c.Validate(req); err != nil {
-	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-	// }
-
-	// Hash the password
 	hashedPassword, err := utils.HashPassword(req.Password)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to hash password", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
-	// Insert the user into the database
 	_, err = config.DB.Exec(
 		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
-		req.Username, hashedPassword, 2, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
+		req.Username, hashedPassword, 2, userID, userID, userName, userName,
 	)
 	if err != nil {
-		fmt.Println("ERROR", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to create admin user", err, logger.Email(req.Username))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Failed to create user",
+			err,
+		))
 	}
 
-	// // Initialize AWS session
-	// sess, _ := pkg.InitAWS()
-
-	// // Create S3 client
-	// s3Client, _ := pkg.InitS3(sess)
-
-	// err = pkg.CreateBucketFolderEmailUser(s3Client, req.Email)
-	// if err != nil {
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	// }
-
+	log.Info("Admin user created successfully", logger.Email(req.Username))
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
 }
 
 func CreateUserHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("user")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
+
 	req := new(CreateUserRequest)
 	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
 	}
 
 	userName, err := getUserAdminByID(userID)
 	if err != nil {
-		fmt.Println("error getUserAdminByID", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to verify admin permissions", err)
+		return apperrors.RespondWithError(c, apperrors.NewForbidden(
+			apperrors.ErrCodeForbidden,
+			"Access denied",
+		))
 	}
 
-	// if err := c.Validate(req); err != nil {
-	// 	return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-	// }
-
-	// Hash the password
 	hashedPassword, err := utils.HashPassword(req.Password)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to hash password", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
 	}
 
-	// Insert the user into the database
 	_, err = config.DB.Exec(
 		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
-		req.Email, hashedPassword, 1, userID, userID, userName, userName, // Hardcoded role ID for no, userName, userNamew
+		req.Email, hashedPassword, 1, userID, userID, userName, userName,
 	)
 	if err != nil {
-		fmt.Println("ERROR", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Error("Failed to create user", err, logger.Email(req.Email))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Failed to create user",
+			err,
+		))
 	}
 
 	// Insert into table generated_email
@@ -470,13 +337,111 @@ func CreateUserHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
 }
 
+// generateBaseUsernames generates all potential usernames based on request parameters
+// Returns a slice of base usernames (before collision resolution)
+func generateBaseUsernames(baseName string, domain string, quantity int, names [][]string) ([]string, error) {
+	usernames := make([]string, 0, quantity)
+
+	for i := 0; i < quantity; i++ {
+		var username string
+		if baseName == "random" {
+			if len(names) == 0 {
+				return nil, fmt.Errorf("no names available")
+			}
+			name := names[i%len(names)]
+			username = fmt.Sprintf("%s%s@%s", name[0], name[1], domain)
+		} else {
+			username = fmt.Sprintf("%s@%s", baseName, domain)
+			if i > 0 {
+				username = fmt.Sprintf("%s%d@%s", baseName, i, domain)
+			}
+		}
+		usernames = append(usernames, strings.ToLower(username))
+	}
+
+	return usernames, nil
+}
+
+// batchCheckExistingEmails checks which emails already exist in the database
+// Returns a map of existing emails for O(1) lookup
+func batchCheckExistingEmails(emails []string, domain string) (map[string]bool, error) {
+	existingMap := make(map[string]bool)
+	if len(emails) == 0 {
+		return existingMap, nil
+	}
+
+	// Get all users with matching domain to check for collisions
+	// This fetches all emails at once instead of one-by-one
+	var existingEmails []string
+	query := "SELECT email FROM users WHERE email LIKE ?"
+	err := config.DB.Select(&existingEmails, query, "%@"+domain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch existing emails: %w", err)
+	}
+
+	// Build lookup map
+	for _, email := range existingEmails {
+		existingMap[strings.ToLower(email)] = true
+	}
+
+	return existingMap, nil
+}
+
+// findAvailableUsername finds an available username given existing emails map
+// It modifies the existingMap to track newly allocated usernames
+func findAvailableUsername(baseUsername string, domain string, existingMap map[string]bool) string {
+	username := strings.ToLower(baseUsername)
+
+	// If doesn't exist, use it directly
+	if !existingMap[username] {
+		existingMap[username] = true // Mark as taken for subsequent calls
+		return username
+	}
+
+	// Extract the local part before @
+	localPart := strings.Split(username, "@")[0]
+
+	// Extract trailing digits from the original username
+	re := regexp.MustCompile(`^(.*?)(\d+)$`)
+	matches := re.FindStringSubmatch(localPart)
+
+	var namePart string
+	var counter int
+
+	if len(matches) == 3 {
+		namePart = matches[1]
+		counter, _ = strconv.Atoi(matches[2])
+		counter++ // Start from the next number
+	} else {
+		namePart = localPart
+		counter = 1
+	}
+
+	// Find available username by incrementing counter
+	for {
+		candidate := fmt.Sprintf("%s%d@%s", namePart, counter, domain)
+		if !existingMap[candidate] {
+			existingMap[candidate] = true // Mark as taken
+			return candidate
+		}
+		counter++
+		// Safety limit to prevent infinite loops
+		if counter > 100000 {
+			break
+		}
+	}
+
+	return username // Fallback (shouldn't reach here normally)
+}
+
 func BulkCreateUserHandler(c echo.Context) error {
-	// Get user ID and email from context
+	log := logger.Get().WithComponent("user_bulk_create")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
 	userName, err := getUserAdminByID(userID)
 	if err != nil {
-		fmt.Println("error getUserAdminByID", err)
+		log.Error("Failed to get admin user", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
@@ -489,103 +454,80 @@ func BulkCreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "BaseName and Quantity are required"})
 	}
 
-	createdUsers := []map[string]string{}
-	skippedUsers := []map[string]string{}
+	log.Info("Starting bulk user creation",
+		logger.Int("quantity", req.Quantity),
+		logger.String("domain", req.Domain),
+		logger.String("base_name", req.BaseName),
+	)
 
+	// Load names if random mode
 	var names [][]string
 	if req.BaseName == "random" {
-		// Load names from CSV file
 		file, err := os.Open("names.csv")
 		if err != nil {
-			fmt.Println("Failed to open names.csv, using default list", err)
+			log.Warn("Failed to open names.csv, using default list", logger.Err(err))
 			names = ListOfNames
 		} else {
 			defer file.Close()
-
 			reader := csv.NewReader(file)
 			names, err = reader.ReadAll()
 			if err != nil {
-				fmt.Println("Failed to readAll names.csv", err)
+				log.Error("Failed to read names.csv", err)
 				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
 			}
 		}
-
-		// Shuffle the names to ensure randomness
 		rand.Seed(uint64(time.Now().UnixNano()))
 		rand.Shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
 	}
 
-	for i := 0; i < req.Quantity; i++ {
-		var username string
-		if req.BaseName == "random" {
-			if len(names) == 0 {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "No names available in names.csv"})
-			}
-			name := names[i%len(names)]
-			username = fmt.Sprintf("%s%s@%s", name[0], name[1], req.Domain)
-		} else {
-			username = fmt.Sprintf("%s@%s", req.BaseName, req.Domain)
-			if i > 0 {
-				username = fmt.Sprintf("%s%d@%s", req.BaseName, i, req.Domain)
-			}
-		}
-		username = strings.ToLower(username)
+	// Step 1: Generate all base usernames
+	baseUsernames, err := generateBaseUsernames(req.BaseName, req.Domain, req.Quantity, names)
+	if err != nil {
+		log.Error("Failed to generate usernames", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
-		// Check if the base username exists
-		var exists bool
-		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
+	// Step 2: Batch check existing emails (single query instead of N queries)
+	existingMap, err := batchCheckExistingEmails(baseUsernames, req.Domain)
+	if err != nil {
+		log.Error("Failed to check existing emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
-		// If the base username exists, find an available username with a number
-		if exists {
-			// Initialize counter
-			counter := 1
-			originalUsername := strings.Split(username, "@")[0]
+	// Step 3: Resolve collisions and get final usernames
+	finalUsernames := make([]string, 0, req.Quantity)
+	for _, baseUsername := range baseUsernames {
+		availableUsername := findAvailableUsername(baseUsername, req.Domain, existingMap)
+		finalUsernames = append(finalUsernames, availableUsername)
+	}
 
-			// Extract trailing digits from the original username
-			re := regexp.MustCompile(`^(.*?)(\d+)$`)
-			matches := re.FindStringSubmatch(originalUsername)
-			if len(matches) == 3 {
-				namePart := matches[1]
-				numberPart := matches[2]
-				counter, _ = strconv.Atoi(numberPart)
-				counter++ // Start from the next number
-				originalUsername = namePart
-			}
+	// Step 4: Hash password once (same for all users in this batch)
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		log.Error("Failed to hash password", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
-			// Loop to find an available username
-			exists = true
-			for exists {
-				username = fmt.Sprintf("%s%d@%s", originalUsername, counter, req.Domain)
-				err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
-				if err != nil {
-					return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				}
-				counter++
-			}
-		}
+	// Step 5: Create users in a single transaction
+	createdUsers := []map[string]string{}
+	skippedUsers := []map[string]string{}
 
-		// Start transaction for this user
-		tx, err := config.DB.Begin()
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-		defer tx.Rollback()
+	tx, err := config.DB.Begin()
+	if err != nil {
+		log.Error("Failed to start transaction", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	defer tx.Rollback()
 
-		hashedPassword, err := utils.HashPassword(req.Password) // Use a default password or generate one
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-
+	for i, username := range finalUsernames {
 		// Insert user
 		_, err = tx.Exec(
 			"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
 			username, hashedPassword, userID, userID, userName, userName,
 		)
 		if err != nil {
-			fmt.Println("Failed to insert user", err)
+			log.Warn("Failed to insert user", logger.String("email", username), logger.Err(err))
+			skippedUsers = append(skippedUsers, map[string]string{"email": username, "reason": err.Error()})
 			continue
 		}
 
@@ -595,18 +537,26 @@ func BulkCreateUserHandler(c echo.Context) error {
 			username, userID, userID,
 		)
 		if err != nil {
-			fmt.Println("Failed to insert generated email", err)
+			log.Warn("Failed to insert generated email", logger.String("email", username), logger.Err(err))
 			continue
 		}
 
 		createdUsers = append(createdUsers, map[string]string{
 			"No":       fmt.Sprintf("%d", i+1),
 			"Email":    username,
-			"Password": req.Password, // Use the actual password if generated
+			"Password": req.Password,
 		})
-
-		tx.Commit()
 	}
+
+	if err := tx.Commit(); err != nil {
+		log.Error("Failed to commit transaction", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	log.Info("Bulk user creation completed",
+		logger.Int("created", len(createdUsers)),
+		logger.Int("skipped", len(skippedUsers)),
+	)
 
 	// Generate the email body with enhanced styling
 	var emailBody strings.Builder
@@ -632,16 +582,14 @@ func BulkCreateUserHandler(c echo.Context) error {
 	emailBody.WriteString("</table>")
 
 	emailUser := viper.GetString("EMAIL_SUPPORT")
-	// Send email via pkg/aws
 	err = pkg.SendEmailViaResend(emailUser, req.SendTo, "Mailria Create Bulk User", emailBody.String(), nil)
 	if err != nil {
-		fmt.Println("Failed to send email", err)
+		log.Error("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
 		})
 	}
 
-	// Return the response
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"message":       fmt.Sprintf("%d users created successfully", len(createdUsers)),
 		"created_users": createdUsers,
@@ -1078,11 +1026,13 @@ type BulkCreateUserV2Request struct {
 
 // BulkCreateUserV2Handler creates users with auto-generated passwords
 func BulkCreateUserV2Handler(c echo.Context) error {
+	log := logger.Get().WithComponent("user_bulk_create_v2")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
 	userName, err := getUserAdminByID(userID)
 	if err != nil {
-		fmt.Println("error getUserAdminByID", err)
+		log.Error("Failed to get admin user", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
@@ -1103,89 +1053,71 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 		})
 	}
 
-	createdUsers := []map[string]string{}
+	log.Info("Starting bulk user creation v2",
+		logger.Int("quantity", req.Quantity),
+		logger.String("domain", req.Domain),
+		logger.String("base_name", req.BaseName),
+		logger.Int("password_length", req.PasswordLength),
+	)
 
+	// Load names if random mode
 	var names [][]string
 	if req.BaseName == "random" {
 		file, err := os.Open("names.csv")
 		if err != nil {
-			fmt.Println("Failed to open names.csv, using default list", err)
+			log.Warn("Failed to open names.csv, using default list", logger.Err(err))
 			names = ListOfNames
 		} else {
 			defer file.Close()
-
 			reader := csv.NewReader(file)
 			names, err = reader.ReadAll()
 			if err != nil {
-				fmt.Println("Failed to readAll names.csv", err)
+				log.Error("Failed to read names.csv", err)
 				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
 			}
 		}
-
 		rand.Seed(uint64(time.Now().UnixNano()))
 		rand.Shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
 	}
 
-	for i := 0; i < req.Quantity; i++ {
-		var username string
-		if req.BaseName == "random" {
-			if len(names) == 0 {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "No names available in names.csv"})
-			}
-			name := names[i%len(names)]
-			username = fmt.Sprintf("%s%s@%s", name[0], name[1], req.Domain)
-		} else {
-			username = fmt.Sprintf("%s@%s", req.BaseName, req.Domain)
-			if i > 0 {
-				username = fmt.Sprintf("%s%d@%s", req.BaseName, i, req.Domain)
-			}
-		}
-		username = strings.ToLower(username)
+	// Step 1: Generate all base usernames
+	baseUsernames, err := generateBaseUsernames(req.BaseName, req.Domain, req.Quantity, names)
+	if err != nil {
+		log.Error("Failed to generate usernames", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
-		// Check if username exists and find available one
-		var exists bool
-		err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
+	// Step 2: Batch check existing emails (single query instead of N queries)
+	existingMap, err := batchCheckExistingEmails(baseUsernames, req.Domain)
+	if err != nil {
+		log.Error("Failed to check existing emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
-		if exists {
-			counter := 1
-			originalUsername := strings.Split(username, "@")[0]
+	// Step 3: Resolve collisions and get final usernames
+	finalUsernames := make([]string, 0, req.Quantity)
+	for _, baseUsername := range baseUsernames {
+		availableUsername := findAvailableUsername(baseUsername, req.Domain, existingMap)
+		finalUsernames = append(finalUsernames, availableUsername)
+	}
 
-			re := regexp.MustCompile(`^(.*?)(\d+)$`)
-			matches := re.FindStringSubmatch(originalUsername)
-			if len(matches) == 3 {
-				namePart := matches[1]
-				numberPart := matches[2]
-				counter, _ = strconv.Atoi(numberPart)
-				counter++
-				originalUsername = namePart
-			}
+	// Step 4: Create users in a single transaction
+	createdUsers := []map[string]string{}
 
-			exists = true
-			for exists {
-				username = fmt.Sprintf("%s%d@%s", originalUsername, counter, req.Domain)
-				err := config.DB.Get(&exists, "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)", username)
-				if err != nil {
-					return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				}
-				counter++
-			}
-		}
+	tx, err := config.DB.Begin()
+	if err != nil {
+		log.Error("Failed to start transaction", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	defer tx.Rollback()
 
-		// Generate secure password
+	for _, username := range finalUsernames {
+		// Generate secure password for each user
 		password := generateSecurePassword(req.PasswordLength)
-
-		tx, err := config.DB.Begin()
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-		defer tx.Rollback()
-
 		hashedPassword, err := utils.HashPassword(password)
 		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			log.Warn("Failed to hash password", logger.String("email", username), logger.Err(err))
+			continue
 		}
 
 		_, err = tx.Exec(
@@ -1193,7 +1125,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 			username, hashedPassword, userID, userID, userName, userName,
 		)
 		if err != nil {
-			fmt.Println("Failed to insert user", err)
+			log.Warn("Failed to insert user", logger.String("email", username), logger.Err(err))
 			continue
 		}
 
@@ -1202,7 +1134,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 			username, userID, userID,
 		)
 		if err != nil {
-			fmt.Println("Failed to insert generated email", err)
+			log.Warn("Failed to insert generated email", logger.String("email", username), logger.Err(err))
 			continue
 		}
 
@@ -1210,9 +1142,17 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 			"email":    username,
 			"password": password,
 		})
-
-		tx.Commit()
 	}
+
+	if err := tx.Commit(); err != nil {
+		log.Error("Failed to commit transaction", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	log.Info("Bulk user creation v2 completed",
+		logger.Int("created", len(createdUsers)),
+		logger.Int("requested", req.Quantity),
+	)
 
 	response := map[string]interface{}{
 		"message":       fmt.Sprintf("Successfully created %d users", len(createdUsers)),
@@ -1252,7 +1192,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 		emailFrom := viper.GetString("EMAIL_SUPPORT")
 		err = pkg.SendEmailViaResend(emailFrom, req.SendTo, "Mailria Bulk User Creation", emailBody.String(), nil)
 		if err != nil {
-			fmt.Println("Failed to send email", err)
+			log.Warn("Failed to send credentials email", logger.Err(err))
 			response["email_error"] = "Failed to send credentials email"
 		} else {
 			response["credentials_sent_to"] = req.SendTo

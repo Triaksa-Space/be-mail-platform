@@ -9,12 +9,15 @@ import (
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/labstack/echo/v4"
 )
 
 // GetOverviewHandler returns the admin dashboard overview
 func GetOverviewHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("admin_overview")
+
 	// Get users count for mailria.com
 	var totalUsersMailria int64
 	err := config.DB.Get(&totalUsersMailria, `
@@ -22,7 +25,7 @@ func GetOverviewHandler(c echo.Context) error {
 		WHERE role_id = 1 AND email LIKE '%@mailria.com'
 	`)
 	if err != nil {
-		fmt.Println("Error counting mailria users:", err)
+		log.Warn("Error counting mailria users", logger.Err(err))
 		totalUsersMailria = 0
 	}
 
@@ -33,7 +36,7 @@ func GetOverviewHandler(c echo.Context) error {
 		WHERE role_id = 1 AND email LIKE '%@mailsaja.com'
 	`)
 	if err != nil {
-		fmt.Println("Error counting mailsaja users:", err)
+		log.Warn("Error counting mailsaja users", logger.Err(err))
 		totalUsersMailsaja = 0
 	}
 
@@ -41,7 +44,7 @@ func GetOverviewHandler(c echo.Context) error {
 	var totalInbox int64
 	err = config.DB.Get(&totalInbox, "SELECT COUNT(*) FROM emails")
 	if err != nil {
-		fmt.Println("Error counting inbox:", err)
+		log.Warn("Error counting inbox", logger.Err(err))
 		totalInbox = 0
 	}
 
@@ -49,7 +52,7 @@ func GetOverviewHandler(c echo.Context) error {
 	var totalSent int64
 	err = config.DB.Get(&totalSent, "SELECT COUNT(*) FROM sent_emails")
 	if err != nil {
-		fmt.Println("Error counting sent:", err)
+		log.Warn("Error counting sent", logger.Err(err))
 		totalSent = 0
 	}
 
@@ -78,7 +81,7 @@ func GetOverviewHandler(c echo.Context) error {
 		LIMIT 10
 	`)
 	if err != nil {
-		fmt.Println("Error fetching recent inbox:", err)
+		log.Warn("Error fetching recent inbox", logger.Err(err))
 	}
 
 	inboxEmails := make([]OverviewInboxEmail, 0)
@@ -138,7 +141,7 @@ func GetOverviewHandler(c echo.Context) error {
 		LIMIT 10
 	`)
 	if err != nil {
-		fmt.Println("Error fetching recent sent:", err)
+		log.Warn("Error fetching recent sent", logger.Err(err))
 	}
 
 	sentEmails := make([]OverviewSentEmail, 0)
