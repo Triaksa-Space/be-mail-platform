@@ -20,15 +20,16 @@ func RegisterRoutes(e *echo.Echo) {
 	adminRoles := []int{0, 2}
 
 	// Health check routes (no auth required)
-	e.GET("/health", health.HealthHandler)
-	e.GET("/health/live", health.LivenessHandler)
-	e.GET("/health/ready", health.ReadinessHandler)
-	e.GET("/health/stats", health.StatsHandler)
+	e.GET("/v2/health", health.HealthHandler)
+	e.GET("/v2/health/live", health.LivenessHandler)
+	e.GET("/v2/health/ready", health.ReadinessHandler)
+	e.GET("/v2/health/stats", health.StatsHandler)
 
 	// Auth routes (new refresh token flow)
 	e.POST("/login", auth.LoginHandler)
 	e.POST("/token/refresh", auth.RefreshTokenHandler)
 	e.POST("/logout", auth.LogoutHandler, middleware.JWTMiddleware)
+	e.GET("/health", email.DatabaseHealthCheckHandler)
 
 	// Legacy login route (for backward compatibility) - uses same handler as /login
 	e.POST("/user/login", auth.LoginHandler)
@@ -59,7 +60,7 @@ func RegisterRoutes(e *echo.Echo) {
 	userGroup.POST("/admin", user.CreateUserAdminHandler, middleware.RoleMiddleware(superAdminOnly))
 	userGroup.POST("/bulk", user.BulkCreateUserHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("create_bulk"))
 	userGroup.POST("/bulk/v2", user.BulkCreateUserV2Handler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("create_bulk"))
-	userGroup.GET("/get_user_me", user.GetUserMeHandler)                                            // Must be before /:id
+	userGroup.GET("/get_user_me", user.GetUserMeHandler) // Must be before /:id
 	userGroup.GET("/", user.ListUsersHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("user_list"))
 	userGroup.GET("/admin", user.ListAdminUsersHandler, middleware.RoleMiddleware(superAdminOnly))
 	userGroup.GET("/:id", user.GetUserHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("user_list")) // Parameterized route last
@@ -75,9 +76,9 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(adminRoles))
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
 	emailGroup.GET("/sent/by_user/:id", email.ListSentEmailsByUserIDHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("all_sent")) // Admin: list sent emails by user
-	emailGroup.GET("/sent/list", email.GetUserSentEmailsHandler)            // User's own sent emails list
-	emailGroup.GET("/sent/detail/:id", email.GetUserSentEmailDetailHandler) // User's own sent email detail
-	emailGroup.GET("/sent", email.GetUserSentEmailsHandler)                 // User's own sent emails
+	emailGroup.GET("/sent/list", email.GetUserSentEmailsHandler)                                                                                                      // User's own sent emails list
+	emailGroup.GET("/sent/detail/:id", email.GetUserSentEmailDetailHandler)                                                                                           // User's own sent email detail
+	emailGroup.GET("/sent", email.GetUserSentEmailsHandler)                                                                                                           // User's own sent emails
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.POST("/send/resend", email.SendEmailViaResendHandler)
 	emailGroup.POST("/send/smtp", email.SendEmailSMTPHandler)
