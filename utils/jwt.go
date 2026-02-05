@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// GenerateJWT generates a long-lived JWT token (30 days) for backward compatibility
 func GenerateJWT(userID int64, email string, role_id int) (string, error) {
 	jwtSecret := viper.GetString("JWT_SECRET")
 
@@ -21,6 +22,26 @@ func GenerateJWT(userID int64, email string, role_id int) (string, error) {
 	tokenString, err := token.SignedString([]byte(jwtSecret))
 	if err != nil {
 		fmt.Println("Error signing token:", err)
+		return "", err
+	}
+	return tokenString, nil
+}
+
+// GenerateAccessToken generates a short-lived access token (15 minutes)
+func GenerateAccessToken(userID int64, email string, roleID int) (string, error) {
+	jwtSecret := viper.GetString("JWT_SECRET")
+
+	claims := jwt.MapClaims{
+		"user_id": userID,
+		"email":   email,
+		"role_id": roleID,
+		"exp":     time.Now().Add(15 * time.Minute).Unix(),
+		"type":    "access",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(jwtSecret))
+	if err != nil {
+		fmt.Println("Error signing access token:", err)
 		return "", err
 	}
 	return tokenString, nil

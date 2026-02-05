@@ -13,7 +13,9 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/labstack/echo/v4 v4.12.0
 	github.com/labstack/gommon v0.4.2
+	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/resend/resend-go/v2 v2.13.0
+	github.com/rs/zerolog v1.31.0
 	github.com/spf13/viper v1.19.0
 	golang.org/x/crypto v0.29.0
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9
@@ -22,11 +24,13 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/cention-sany/utf7 v0.0.0-20170124080048-26cad61bd60a // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/gorilla/css v1.0.1 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/jaytaylor/html2text v0.0.0-20230321000545-74c2419ad056 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect

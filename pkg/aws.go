@@ -325,8 +325,7 @@ func SendEmailWithHARAKA(toAddress, fromAddress, subject, htmlBody string, attac
 	smtpUser := viper.GetString("SMTP_USERNAME")
 	smtpPassword := viper.GetString("SMTP_PASSWORD")
 
-	fmt.Println("SMTP_HOST: ", smtpHost)
-	fmt.Println("SMTP_USERNAME: ", smtpUser)
+	// NOTE: Never log credentials - removed sensitive logging
 
 	// Create a new email message
 	m := gomail.NewMessage()

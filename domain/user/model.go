@@ -6,7 +6,8 @@ type User struct {
 	UserEncodeID   string     `json:"user_encode_id"` // User Encoded ID
 	ID             int64      `db:"id"`
 	Email          string     `db:"email"`
-	Password       string     `db:"password"`
+	BindingEmail   *string    `db:"binding_email" json:"binding_email"` // For password recovery
+	Password       string     `db:"password" json:"-"`
 	RoleID         int        `db:"role_id"`
 	LastLogin      *time.Time `db:"last_login"`
 	SentEmails     int        `db:"sent_emails"`
