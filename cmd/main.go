@@ -40,7 +40,7 @@ func main() {
 	case "server":
 		runServer()
 	case "sync":
-		runSync()
+		runSyncWithProcess() // runSync()
 	case "sync_process":
 		runSyncWithProcess()
 	case "sync_sent":
