@@ -47,6 +47,8 @@ func main() {
 		runSyncSent()
 	case "process":
 		runProcess()
+	case "old_sync":
+		runSync()
 	default:
 		log.Fatal("Invalid command", nil, logger.String("command", os.Args[1]))
 	}
