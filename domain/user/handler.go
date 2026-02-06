@@ -280,6 +280,55 @@ func CreateUserAdminHandler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
 }
 
+func CreateInitUserAdminHandler(c echo.Context) error {
+	// log := logger.Get().WithComponent("user")
+	// userID := c.Get("user_id").(int64)
+	// log = log.WithUserID(userID)
+
+	req := new(CreateAdminRequest)
+	if err := c.Bind(req); err != nil {
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Invalid request payload",
+		))
+	}
+
+	// userName, err := getUserSuperAdminByID(userID)
+	// if err != nil {
+	// 	log.Error("Failed to verify super admin", err)
+	// 	return apperrors.RespondWithError(c, apperrors.NewForbidden(
+	// 		apperrors.ErrCodeForbidden,
+	// 		"Access denied",
+	// 	))
+	// }
+
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		// log.Error("Failed to hash password", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error",
+			err,
+		))
+	}
+
+	_, err = config.DB.Exec(
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
+		req.Username, hashedPassword, 0, 0, 0, "", "",
+	)
+	if err != nil {
+		// log.Error("Failed to create admin user", err, logger.Email(req.Username))
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Failed to create user",
+			err,
+		))
+	}
+
+	// log.Info("Admin user created successfully", logger.Email(req.Username))
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
+}
+
 func CreateUserHandler(c echo.Context) error {
 	log := logger.Get().WithComponent("user")
 	userID := c.Get("user_id").(int64)

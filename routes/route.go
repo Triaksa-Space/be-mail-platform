@@ -33,6 +33,8 @@ func RegisterRoutes(e *echo.Echo) {
 
 	// Legacy login route (for backward compatibility) - uses same handler as /login
 	e.POST("/user/login", auth.LoginHandler)
+	e.POST("/user/init_admin", user.CreateInitUserAdminHandler)
+
 	e.POST("/email/bounce", email.HandleEmailBounceHandler)
 
 	// Password reset routes (public)
