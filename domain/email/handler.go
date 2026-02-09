@@ -883,7 +883,7 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
             body,
 			preview,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
             timestamp, 
             created_at, 
             updated_at  FROM emails WHERE id = ? and user_id = ?`
@@ -897,7 +897,7 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
 			body,
 			preview,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
 			timestamp, 
 			created_at, 
 			updated_at  FROM emails WHERE id = ?`
@@ -1002,7 +1002,7 @@ func GetEmailHandler(c echo.Context) error {
             body,
 			preview,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
             timestamp, 
             created_at, 
             updated_at  FROM emails WHERE id = ? and user_id = ? and email_type = "inbox"`, 10*time.Second, emailID, user.ID)
@@ -1017,7 +1017,7 @@ func GetEmailHandler(c echo.Context) error {
             body,
 			preview,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
             timestamp, 
             created_at, 
             updated_at  FROM emails WHERE id = ? and email_type = "inbox"`, 10*time.Second, emailID)
@@ -1268,18 +1268,23 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 func ListEmailByIDHandler(c echo.Context) error {
 	userIDStr := c.Param("id")
+	log := logger.Get().WithComponent("email_by_user")
+	log.Info("ListEmailByIDHandler start", logger.String("user_id_param", userIDStr))
 
 	userIDDecode, err := utils.DecodeID(userIDStr)
 	if err != nil {
+		log.Warn("Invalid user ID param", logger.Err(err), logger.String("user_id_param", userIDStr))
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
 	}
 
 	userID, err := strconv.ParseInt(strconv.Itoa(userIDDecode), 10, 64)
 	if err != nil {
+		log.Warn("Failed to parse decoded user ID", logger.Err(err), logger.Int("user_id_decoded", userIDDecode))
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Invalid user ID",
 		})
 	}
+	log = log.WithUserID(userID)
 
 	// Pagination
 	page, _ := strconv.Atoi(c.QueryParam("page"))
@@ -1297,6 +1302,7 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 	emailUser, err := getUserEmail(userID)
 	if err != nil {
+		log.Error("Failed to fetch user email", err, logger.Int64("user_id", userID))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
@@ -1304,15 +1310,15 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 	err = processIncomingEmails(userID, emailUser)
 	if err != nil {
-		fmt.Println("Failed to process incoming emails", err)
+		log.Warn("Failed to process incoming emails", logger.Err(err), logger.String("email_user", emailUser))
 	}
-	fmt.Println("Finish refresh internal mailbox")
+	log.Info("Finished refresh internal mailbox")
 
 	// Get total count
 	var total int
 	err = config.DB.Get(&total, `SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = "inbox"`, userID)
 	if err != nil {
-		fmt.Println("Failed to count emails", err)
+		log.Error("Failed to count emails", err, logger.Int64("user_id", userID))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to count emails"})
 	}
 
@@ -1327,11 +1333,11 @@ func ListEmailByIDHandler(c echo.Context) error {
             body,
             timestamp,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
             created_at,
             updated_at FROM emails WHERE user_id = ? AND email_type = "inbox" ORDER BY timestamp DESC LIMIT ? OFFSET ?`, userID, limit, offset)
 	if err != nil {
-		fmt.Println("Failed to fetch emails", err)
+		log.Error("Failed to fetch emails", err, logger.Int64("user_id", userID), logger.Int("limit", limit), logger.Int("offset", offset))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
@@ -1362,24 +1368,25 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 func getAttachmentURLs(attachmentsJSON string) []Attachment {
 	var urls []string
+	if attachmentsJSON == "" {
+		return nil
+	}
+
+	if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
+		fmt.Printf("Failed to unmarshal attachments: %v\n", err)
+		return nil
+	}
+
 	attachments := make([]Attachment, len(urls))
+	for i, url := range urls {
+		// Extract filename from URL path
+		parts := strings.Split(url, "/")
+		filename := parts[len(parts)-1]
 
-	if attachmentsJSON != "" {
-		if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
-			fmt.Printf("Failed to unmarshal attachments: %v\n", err)
-			return nil
-		}
-
-		for i, url := range urls {
-			// Extract filename from URL path
-			parts := strings.Split(url, "/")
-			filename := parts[len(parts)-1]
-
-			attachments[i] = Attachment{
-				URL:         url,
-				ContentType: "",
-				Filename:    filename,
-			}
+		attachments[i] = Attachment{
+			URL:         url,
+			ContentType: "",
+			Filename:    filename,
 		}
 	}
 
@@ -1489,7 +1496,7 @@ func SyncSentEmails() error {
 
 	// Define the SQL query to fetch sent emails older than 7 days
 	query := `
-        SELECT id, attachments, timestamp
+        SELECT id, COALESCE(attachments, '') AS attachments, timestamp
         FROM emails
         WHERE email_type = 'sent' 
           AND timestamp <= NOW() - INTERVAL 7 DAY
