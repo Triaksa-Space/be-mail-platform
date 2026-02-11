@@ -228,7 +228,7 @@ func ChangePasswordHandler(c echo.Context) error {
 	}
 
 	log.Info("Password changed successfully")
-	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Password changed successfully."})
 }
 
 func CreateUserAdminHandler(c echo.Context) error {

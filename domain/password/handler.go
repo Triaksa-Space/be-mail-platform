@@ -39,7 +39,7 @@ func ForgotPasswordHandler(c echo.Context) error {
 	if req.Email == "" || req.BindingEmail == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "validation_error",
-			"message": "Email and binding_email are required",
+			"message": "Email and binding_email are required.",
 		})
 	}
 
@@ -98,19 +98,21 @@ func ForgotPasswordHandler(c echo.Context) error {
 		log.Debug("Password reset attempted by non-user role", logger.Int("role_id", user.RoleID))
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "invalid_credentials",
-			"message": "Invalid email or binding email",
+			"message": "Invalid email or binding email.",
+		})
+	}
+
+	// User must configure binding email before using forgot password.
+	if !user.BindingEmail.Valid || user.BindingEmail.String == "" {
+		log.Debug("Password reset attempted without binding email configured", logger.Email(req.Email))
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error":   "invalid_credentials",
+			"message": "Invalid email or binding email. Please set binding email before using forgot password.",
 		})
 	}
 
 	// Determine expected binding email
-	var expectedBindingEmail string
-	if user.BindingEmail.Valid && user.BindingEmail.String != "" {
-		// User has a binding email set - must match
-		expectedBindingEmail = user.BindingEmail.String
-	} else {
-		// User has no binding email - binding_email must equal email
-		expectedBindingEmail = user.Email
-	}
+	expectedBindingEmail := user.BindingEmail.String
 
 	// Validate binding email
 	if req.BindingEmail != expectedBindingEmail {
@@ -257,7 +259,7 @@ func handleFailedForgotPasswordAttempt(c echo.Context, email string, log logger.
 		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "invalid_credentials",
-			"message": "Invalid email or binding email",
+			"message": "Invalid email or binding email.",
 		})
 	}
 
@@ -265,7 +267,7 @@ func handleFailedForgotPasswordAttempt(c echo.Context, email string, log logger.
 		log.Warn("Error fetching forgot password attempts", logger.Err(err))
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "invalid_credentials",
-			"message": "Invalid email or binding email",
+			"message": "Invalid email or binding email.",
 		})
 	}
 
@@ -320,7 +322,7 @@ func handleFailedForgotPasswordAttempt(c echo.Context, email string, log logger.
 
 	return c.JSON(http.StatusBadRequest, map[string]string{
 		"error":   "invalid_credentials",
-		"message": "Invalid email or binding email",
+		"message": "Invalid email or binding email.",
 	})
 }
 
@@ -348,7 +350,7 @@ func VerifyCodeHandler(c echo.Context) error {
 	if req.Email == "" || req.Code == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "invalid_request",
-			"message": "Email and code are required",
+			"message": "Email and code are required.",
 		})
 	}
 
@@ -359,7 +361,7 @@ func VerifyCodeHandler(c echo.Context) error {
 		log.Debug("Verify code attempted for unknown user", logger.Email(req.Email))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid or expired verification code",
+			"message": "Invalid code.",
 		})
 	}
 
@@ -370,7 +372,7 @@ func VerifyCodeHandler(c echo.Context) error {
 		log.Debug("Verify code attempted by non-user role", logger.Int("role_id", user.RoleID))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid or expired verification code",
+			"message": "Invalid code.",
 		})
 	}
 
@@ -390,7 +392,7 @@ func VerifyCodeHandler(c echo.Context) error {
 			log.Debug("No valid reset code found")
 			return c.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error":   "invalid_code",
-				"message": "Invalid or expired verification code",
+				"message": "Invalid code.",
 			})
 		}
 		log.Error("Error fetching reset code", err)
@@ -410,7 +412,7 @@ func VerifyCodeHandler(c echo.Context) error {
 	if resetCode.ExpiresAt.Before(now) {
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid or expired verification code",
+			"message": "Invalid code.",
 		})
 	}
 
@@ -450,7 +452,7 @@ func VerifyCodeHandler(c echo.Context) error {
 			}
 			return c.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error":              "attempt_warning",
-				"message":            "One more failed attempt will temporarily block access",
+				"message":            "One more attempt before access is blocked.",
 				"remaining_attempts": 1,
 			})
 		}
@@ -467,7 +469,7 @@ func VerifyCodeHandler(c echo.Context) error {
 
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid or expired verification code",
+			"message": "Invalid code.",
 		})
 	}
 
