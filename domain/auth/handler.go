@@ -35,7 +35,7 @@ func LoginHandler(c echo.Context) error {
 		log.Warn("Invalid login request payload", logger.Err(err))
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
@@ -64,7 +64,7 @@ func LoginHandler(c echo.Context) error {
 				log.Error("Failed to insert initial login attempts record", err, logger.Email(req.Email))
 				return apperrors.RespondWithError(c, apperrors.NewInternal(
 					apperrors.ErrCodeDatabaseError,
-					"Internal server error",
+					"Internal server error.",
 					err,
 				))
 			}
@@ -78,7 +78,7 @@ func LoginHandler(c echo.Context) error {
 				log.Error("Failed to fetch login attempts after insert", err, logger.Email(req.Email))
 				return apperrors.RespondWithError(c, apperrors.NewInternal(
 					apperrors.ErrCodeDatabaseError,
-					"Internal server error",
+					"Internal server error.",
 					err,
 				))
 			}
@@ -86,7 +86,7 @@ func LoginHandler(c echo.Context) error {
 			log.Error("Failed to fetch login attempts", err, logger.Email(req.Email))
 			return apperrors.RespondWithError(c, apperrors.NewInternal(
 				apperrors.ErrCodeDatabaseError,
-				"Internal server error",
+				"Internal server error.",
 				err,
 			))
 		}
@@ -114,7 +114,7 @@ func LoginHandler(c echo.Context) error {
 			log.Error("Failed to reset login attempts after block period", err, logger.Email(req.Email))
 			return apperrors.RespondWithError(c, apperrors.NewInternal(
 				apperrors.ErrCodeDatabaseError,
-				"Internal server error",
+				"Internal server error.",
 				err,
 			))
 		}
@@ -132,7 +132,7 @@ func LoginHandler(c echo.Context) error {
 		log.Error("Failed to fetch user", err, logger.Email(req.Email))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -152,7 +152,7 @@ func LoginHandler(c echo.Context) error {
 		log.Error("Failed to reset login attempts on success", err, logger.Email(req.Email))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -163,7 +163,7 @@ func LoginHandler(c echo.Context) error {
 		log.Error("Failed to generate access token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -174,7 +174,7 @@ func LoginHandler(c echo.Context) error {
 		log.Error("Failed to generate refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -200,7 +200,7 @@ func LoginHandler(c echo.Context) error {
 		log.Error("Failed to store refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -242,14 +242,14 @@ func RefreshTokenHandler(c echo.Context) error {
 	if err := c.Bind(req); err != nil {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
 	if req.RefreshToken == "" {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeMissingField,
-			"refresh_token is required",
+			"refresh_token is required.",
 		))
 	}
 
@@ -275,7 +275,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to fetch refresh token", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -319,7 +319,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to fetch user for token refresh", err, logger.UserID(storedToken.UserID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -330,7 +330,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to generate access token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -341,7 +341,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to generate refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -365,7 +365,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to start transaction for token rotation", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -380,7 +380,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to insert new refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -397,7 +397,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to revoke old refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -406,7 +406,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		log.Error("Failed to commit token rotation transaction", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -452,7 +452,7 @@ func LogoutHandler(c echo.Context) error {
 			log.Error("Failed to revoke refresh token", err)
 			return apperrors.RespondWithError(c, apperrors.NewInternal(
 				apperrors.ErrCodeDatabaseError,
-				"Internal server error",
+				"Internal server error.",
 				err,
 			))
 		}
@@ -468,14 +468,14 @@ func LogoutHandler(c echo.Context) error {
 			log.Error("Failed to revoke all refresh tokens", err)
 			return apperrors.RespondWithError(c, apperrors.NewInternal(
 				apperrors.ErrCodeDatabaseError,
-				"Internal server error",
+				"Internal server error.",
 				err,
 			))
 		}
 		log.Info("All sessions logout")
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "Successfully logged out"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Successfully logged out."})
 }
 
 // generateRefreshToken generates a cryptographically secure random token
@@ -534,7 +534,7 @@ func handleFailedAttempt(c echo.Context, log logger.Logger, email string, curren
 
 		return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
 			apperrors.ErrCodeRateLimitExceeded,
-			"Careful! One more failed attempt will disable login for 5 minutes.",
+			"One more failed attempt will disable login for 5 minutes.",
 		))
 	} else {
 		_, err := config.DB.Exec(`
@@ -554,7 +554,7 @@ func handleFailedAttempt(c echo.Context, log logger.Logger, email string, curren
 
 	return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
 		apperrors.ErrCodeInvalidCredentials,
-		"Invalid email or password",
+		"Invalid email or password.",
 	))
 }
 

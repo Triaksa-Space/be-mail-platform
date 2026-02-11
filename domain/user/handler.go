@@ -35,7 +35,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		log.Warn("Access denied - not an admin")
 		return apperrors.RespondWithError(c, apperrors.NewForbidden(
 			apperrors.ErrCodeForbidden,
-			"Access Denied",
+			"Access Denied.",
 		))
 	}
 
@@ -43,7 +43,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 	if err := c.Bind(req); err != nil {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
@@ -57,7 +57,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		log.Error("Failed to fetch user password", err, logger.Int("target_user_id", req.UserID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -66,14 +66,14 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		if !utils.CheckPasswordHash(req.OldPassword, hashedPassword) {
 			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
 				apperrors.ErrCodeInvalidPassword,
-				"The password you entered is incorrect",
+				"The password you entered is incorrect.",
 			))
 		}
 
 		if utils.CheckPasswordHash(req.NewPassword, hashedPassword) {
 			return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 				apperrors.ErrCodeValidationFailed,
-				"The new password cannot be the same as the old password",
+				"The new password cannot be the same as the old password.",
 			))
 		}
 	}
@@ -83,7 +83,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		log.Error("Failed to hash new password", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -93,7 +93,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		log.Error("Failed to update password", err, logger.Int("target_user_id", req.UserID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -103,7 +103,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 	}
 
 	log.Info("Admin password changed successfully", logger.Int("target_user_id", req.UserID))
-	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
 }
 
 func ChangePasswordHandler(c echo.Context) error {
@@ -115,7 +115,7 @@ func ChangePasswordHandler(c echo.Context) error {
 	if err := c.Bind(req); err != nil {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
@@ -136,7 +136,7 @@ func ChangePasswordHandler(c echo.Context) error {
 		log.Error("Failed to fetch user data for password change", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -160,7 +160,7 @@ func ChangePasswordHandler(c echo.Context) error {
 				log.Error("Failed to reset failed attempts", err)
 				return apperrors.RespondWithError(c, apperrors.NewInternal(
 					apperrors.ErrCodeDatabaseError,
-					"Internal server error",
+					"Internal server error.",
 					err,
 				))
 			}
@@ -184,14 +184,14 @@ func ChangePasswordHandler(c echo.Context) error {
 
 			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
 				apperrors.ErrCodeInvalidPassword,
-				"The password you entered is incorrect",
+				"The password you entered is incorrect.",
 			))
 		}
 
 		if utils.CheckPasswordHash(req.NewPassword, user.HashedPassword) {
 			return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 				apperrors.ErrCodeValidationFailed,
-				"The new password cannot be the same as the old password",
+				"The new password cannot be the same as the old password.",
 			))
 		}
 	}
@@ -201,7 +201,7 @@ func ChangePasswordHandler(c echo.Context) error {
 		log.Error("Failed to hash new password", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -218,7 +218,7 @@ func ChangePasswordHandler(c echo.Context) error {
 		log.Error("Failed to update password in database", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -228,7 +228,7 @@ func ChangePasswordHandler(c echo.Context) error {
 	}
 
 	log.Info("Password changed successfully")
-	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
 }
 
 func CreateUserAdminHandler(c echo.Context) error {
@@ -240,7 +240,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 	if err := c.Bind(req); err != nil {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
@@ -249,7 +249,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 		log.Error("Failed to verify super admin", err)
 		return apperrors.RespondWithError(c, apperrors.NewForbidden(
 			apperrors.ErrCodeForbidden,
-			"Access denied",
+			"Access denied.",
 		))
 	}
 
@@ -258,7 +258,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 		log.Error("Failed to hash password", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -271,13 +271,13 @@ func CreateUserAdminHandler(c echo.Context) error {
 		log.Error("Failed to create admin user", err, logger.Email(req.Username))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Failed to create user",
+			"Failed to create user.",
 			err,
 		))
 	}
 
 	log.Info("Admin user created successfully", logger.Email(req.Username))
-	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully."})
 }
 
 func CreateInitUserAdminHandler(c echo.Context) error {
@@ -289,7 +289,7 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 	if err := c.Bind(req); err != nil {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
@@ -307,7 +307,7 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 		// log.Error("Failed to hash password", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -320,13 +320,13 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 		// log.Error("Failed to create admin user", err, logger.Email(req.Username))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Failed to create user",
+			"Failed to create user.",
 			err,
 		))
 	}
 
 	// log.Info("Admin user created successfully", logger.Email(req.Username))
-	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully."})
 }
 
 func CreateUserHandler(c echo.Context) error {
@@ -338,7 +338,7 @@ func CreateUserHandler(c echo.Context) error {
 	if err := c.Bind(req); err != nil {
 		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
 			apperrors.ErrCodeValidationFailed,
-			"Invalid request payload",
+			"Invalid request payload.",
 		))
 	}
 
@@ -347,7 +347,7 @@ func CreateUserHandler(c echo.Context) error {
 		log.Error("Failed to verify admin permissions", err)
 		return apperrors.RespondWithError(c, apperrors.NewForbidden(
 			apperrors.ErrCodeForbidden,
-			"Access denied",
+			"Access denied.",
 		))
 	}
 
@@ -356,7 +356,7 @@ func CreateUserHandler(c echo.Context) error {
 		log.Error("Failed to hash password", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeUnexpectedError,
-			"Internal server error",
+			"Internal server error.",
 			err,
 		))
 	}
@@ -369,7 +369,7 @@ func CreateUserHandler(c echo.Context) error {
 		log.Error("Failed to create user", err, logger.Email(req.Email))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
-			"Failed to create user",
+			"Failed to create user.",
 			err,
 		))
 	}
@@ -383,7 +383,7 @@ func CreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully"})
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully."})
 }
 
 // generateBaseUsernames generates all potential usernames based on request parameters
@@ -500,7 +500,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 	}
 
 	if req.BaseName == "" || req.Quantity == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "BaseName and Quantity are required"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "BaseName and Quantity are required."})
 	}
 
 	log.Info("Starting bulk user creation",
@@ -522,7 +522,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 			names, err = reader.ReadAll()
 			if err != nil {
 				log.Error("Failed to read names.csv", err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv."})
 			}
 		}
 		rand.Seed(uint64(time.Now().UnixNano()))
@@ -655,39 +655,39 @@ func DeleteUserAdminHandler(c echo.Context) error {
 	var userEmail string
 	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ? and role_id=2", userID) // 2 is admin 1 is userEmail 0 is superAdmin
 	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found."})
 	}
 
 	// Start transaction
 	tx, err := config.DB.Begin()
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction."})
 	}
 	defer tx.Rollback()
 
 	// Delete emails
 	_, err = tx.Exec("DELETE FROM emails WHERE user_id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete emails"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete emails."})
 	}
 
 	// Delete user
 	result, err := tx.Exec("DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user."})
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found."})
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction."})
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully."})
 }
 
 // ONLY ADMIN CAN DELETE USER EMAIL
@@ -698,36 +698,36 @@ func DeleteUserHandler(c echo.Context) error {
 	var userEmail string
 	err := config.DB.Get(&userEmail, "SELECT email FROM users WHERE id = ? and role_id=1", userID)
 	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found."})
 	}
 
 	// Start transaction
 	tx, err := config.DB.Begin()
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction."})
 	}
 	defer tx.Rollback()
 
 	// Delete emails
 	_, err = tx.Exec("DELETE FROM emails WHERE user_id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete emails"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete emails."})
 	}
 
 	// Delete user
 	result, err := tx.Exec("DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user."})
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found."})
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction."})
 	}
 
 	// TODO: SEARCH HIS ATTACHMENT AND DELETE IT
@@ -743,10 +743,10 @@ func DeleteUserHandler(c echo.Context) error {
 	// err = pkg.DeleteS3FolderContents(s3Client, bucketName, prefix)
 	// if err != nil {
 	// 	fmt.Println("Failed to delete S3 folder:", err)
-	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user files"})
+	// 	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete user files."})
 	// }
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully."})
 }
 
 func GetUserHandler(c echo.Context) error {
@@ -754,7 +754,7 @@ func GetUserHandler(c echo.Context) error {
 
 	userIDDecode, err := utils.DecodeID(userID)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user ID."})
 	}
 
 	userID = strconv.Itoa(userIDDecode)
@@ -861,7 +861,7 @@ func ListAdminUsersHandler(c echo.Context) error {
 	}
 
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error."})
 	}
 
 	var encodeUsers []User
@@ -893,7 +893,7 @@ func ListUsersHandler(c echo.Context) error {
 	// Sanitize and validate email search parameter
 	searchEmail := strings.TrimSpace(c.QueryParam("email"))
 	if len(searchEmail) > 255 { // Add length limit
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Email search parameter too long"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Email search parameter too long."})
 	}
 
 	// Validate sort fields to prevent SQL injection
@@ -1036,7 +1036,7 @@ func SetBindingEmailHandler(c echo.Context) error {
 	if req.BindingEmail == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "invalid_email",
-			"message": "Please provide a valid email address",
+			"message": "Please provide a valid email address.",
 		})
 	}
 
@@ -1044,7 +1044,7 @@ func SetBindingEmailHandler(c echo.Context) error {
 	if !strings.Contains(req.BindingEmail, "@") || !strings.Contains(req.BindingEmail, ".") {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "invalid_email",
-			"message": "Please provide a valid email address",
+			"message": "Please provide a valid email address.",
 		})
 	}
 
@@ -1056,11 +1056,11 @@ func SetBindingEmailHandler(c echo.Context) error {
 	`, req.BindingEmail, userID)
 	if err != nil {
 		fmt.Println("Error updating binding email:", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"message": "Binding email updated successfully",
+		"message": "Binding email updated successfully.",
 	})
 }
 
@@ -1091,14 +1091,14 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 	}
 
 	if req.BaseName == "" || req.Quantity == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "base_name and quantity are required"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "base_name and quantity are required."})
 	}
 
 	// Validate password length
 	if req.PasswordLength < 8 || req.PasswordLength > 32 {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "validation_error",
-			"message": "password_length must be between 8 and 32",
+			"message": "password_length must be between 8 and 32.",
 		})
 	}
 
@@ -1122,7 +1122,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 			names, err = reader.ReadAll()
 			if err != nil {
 				log.Error("Failed to read names.csv", err)
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv"})
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read names.csv."})
 			}
 		}
 		rand.Seed(uint64(time.Now().UnixNano()))
