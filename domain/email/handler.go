@@ -1047,6 +1047,12 @@ func GetEmailHandler(c echo.Context) error {
 		if err != nil {
 			fmt.Println("error updateIsRead", err)
 		}
+	} else {
+		// Admin/superadmin ID: 2 or 0 read state is tracked independently from user read state.
+		err = updateIsReadAdminWithTimeout(emailID)
+		if err != nil {
+			fmt.Println("error updateIsReadAdmin", err)
+		}
 	}
 
 	return c.JSON(http.StatusOK, emailResp)
@@ -1139,6 +1145,7 @@ func ListSentEmailsByUserIDHandler(c echo.Context) error {
 		Body        sql.NullString `db:"body"`
 		Attachments sql.NullString `db:"attachments"`
 		Provider    sql.NullString `db:"provider"`
+		IsRead      bool           `db:"is_read"`
 		Status      string         `db:"status"`
 		SentAt      sql.NullTime   `db:"sent_at"`
 		CreatedAt   time.Time      `db:"created_at"`
@@ -1147,7 +1154,7 @@ func ListSentEmailsByUserIDHandler(c echo.Context) error {
 	var emails []SentEmailRow
 	err = config.DB.Select(&emails, `
 		SELECT id, user_id, from_email, to_email, subject, body_preview, body,
-		       attachments, provider, status, sent_at, created_at
+		       attachments, provider, is_read_admin AS is_read, status, sent_at, created_at
 		FROM sent_emails
 		WHERE user_id = ?
 		ORDER BY COALESCE(sent_at, created_at) DESC
@@ -1196,6 +1203,7 @@ func ListSentEmailsByUserIDHandler(c echo.Context) error {
 			"attachments":     attachments,
 			"has_attachments": hasAttachments,
 			"provider":        provider,
+			"is_read":         e.IsRead,
 			"status":          e.Status,
 			"sent_at":         sentAt,
 			"created_at":      e.CreatedAt,
@@ -1324,7 +1332,7 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 	var emails []Email
 	err = config.DB.Select(&emails, `SELECT id,
-			is_read,
+			is_read_admin AS is_read,
             user_id,
             sender_email,
 			sender_name,
@@ -2599,6 +2607,17 @@ func updateIsReadWithTimeout(emailID string) error {
 	_, err := config.ExecuteWithTimeout(`
 		UPDATE emails 
 		SET is_read = TRUE
+		WHERE id = ?`, 5*time.Second, emailID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateIsReadAdminWithTimeout(emailID string) error {
+	_, err := config.ExecuteWithTimeout(`
+		UPDATE emails
+		SET is_read_admin = TRUE
 		WHERE id = ?`, 5*time.Second, emailID)
 	if err != nil {
 		return err

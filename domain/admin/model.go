@@ -54,6 +54,7 @@ type OverviewSentEmail struct {
 	Subject     string     `json:"subject"`
 	Preview     string     `json:"preview"`
 	Body        string     `json:"body"`
+	IsRead      bool       `json:"is_read"`
 	Status      string     `json:"status"`
 	SentAt      *time.Time `json:"sent_at"`
 }
@@ -133,6 +134,7 @@ type AdminSentEmail struct {
 	ToEmail     string         `db:"to_email"`
 	Subject     string         `db:"subject"`
 	BodyPreview sql.NullString `db:"body_preview"`
+	IsRead      bool           `db:"is_read"`
 	Status      string         `db:"status"`
 	Provider    sql.NullString `db:"provider"`
 	SentAt      sql.NullTime   `db:"sent_at"`
@@ -154,6 +156,7 @@ type AdminSentEmailResponse struct {
 	To          string     `json:"to"`
 	Subject     string     `json:"subject"`
 	BodyPreview string     `json:"body_preview"`
+	IsRead      bool       `json:"is_read"`
 	Status      string     `json:"status"`
 	Provider    string     `json:"provider"`
 	SentAt      *time.Time `json:"sent_at"`

@@ -74,7 +74,7 @@ func GetOverviewHandler(c echo.Context) error {
 	err = config.DB.Select(&inboxRows, `
 		SELECT e.id, e.user_id, u.email as user_email,
 		       e.sender_email, e.sender_name, e.subject, e.preview, e.body,
-		       e.is_read, e.attachments, e.timestamp
+		       e.is_read_admin AS is_read, e.attachments, e.timestamp
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
 		ORDER BY e.timestamp DESC
@@ -128,13 +128,14 @@ func GetOverviewHandler(c echo.Context) error {
 		Subject     string         `db:"subject"`
 		BodyPreview sql.NullString `db:"body_preview"`
 		Body        sql.NullString `db:"body"`
+		IsRead      bool           `db:"is_read"`
 		Status      string         `db:"status"`
 		SentAt      sql.NullTime   `db:"sent_at"`
 	}
 	var sentRows []SentRow
 	err = config.DB.Select(&sentRows, `
 		SELECT s.id, s.user_id, u.email as user_email,
-		       s.from_email, s.to_email, s.subject, s.body_preview, s.body, s.status, s.sent_at
+		       s.from_email, s.to_email, s.subject, s.body_preview, s.body, s.is_read_admin AS is_read, s.status, s.sent_at
 		FROM sent_emails s
 		JOIN users u ON s.user_id = u.id
 		ORDER BY COALESCE(s.sent_at, s.created_at) DESC
@@ -168,6 +169,7 @@ func GetOverviewHandler(c echo.Context) error {
 			Subject:   r.Subject,
 			Preview:   preview,
 			Body:      body,
+			IsRead:    r.IsRead,
 			Status:    r.Status,
 			SentAt:    sentAt,
 		})
@@ -237,7 +239,7 @@ func GetAdminInboxHandler(c echo.Context) error {
 	}
 	if isReadParam != "" {
 		isRead := isReadParam == "true"
-		whereClause += " AND e.is_read = ?"
+		whereClause += " AND e.is_read_admin = ?"
 		args = append(args, isRead)
 	}
 
@@ -253,7 +255,7 @@ func GetAdminInboxHandler(c echo.Context) error {
 	// Get emails
 	args = append(args, limit, offset)
 	query := fmt.Sprintf(`
-		SELECT e.id, e.user_id, u.email as user_email, e.sender_email, e.sender_name, e.subject, e.preview, e.is_read,
+		SELECT e.id, e.user_id, u.email as user_email, e.sender_email, e.sender_name, e.subject, e.preview, e.is_read_admin AS is_read,
 		       CASE WHEN e.attachments IS NOT NULL AND e.attachments != '' AND e.attachments != '[]' THEN 1 ELSE 0 END as has_attachments,
 		       e.timestamp
 		FROM emails e
@@ -310,6 +312,8 @@ func GetAdminInboxHandler(c echo.Context) error {
 
 // GetAdminInboxDetailHandler returns a single inbox email detail for admin view
 func GetAdminInboxDetailHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("admin_inbox_detail")
+
 	// Decode email ID
 	emailIDParam := c.Param("id")
 	emailID, err := utils.DecodeID(emailIDParam)
@@ -339,7 +343,7 @@ func GetAdminInboxDetailHandler(c echo.Context) error {
 	err = config.DB.Get(&email, `
 		SELECT e.id, e.user_id, u.email as user_email,
 		       e.sender_email, e.sender_name, e.subject, e.preview, e.body,
-		       e.attachments, e.is_read, e.timestamp, e.created_at
+		       e.attachments, e.is_read_admin AS is_read, e.timestamp, e.created_at
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
 		WHERE e.id = ?
@@ -355,6 +359,14 @@ func GetAdminInboxDetailHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Internal server error",
 		})
+	}
+
+	if !email.IsRead {
+		if _, err := config.DB.Exec(`UPDATE emails SET is_read_admin = TRUE WHERE id = ?`, emailID); err != nil {
+			log.Warn("Failed to mark admin email as read", logger.Err(err), logger.Int("email_id", emailID))
+		} else {
+			email.IsRead = true
+		}
 	}
 
 	// Build response
@@ -418,6 +430,7 @@ func GetAdminSentHandler(c echo.Context) error {
 	toEmail := c.QueryParam("to")
 	subject := c.QueryParam("subject")
 	status := c.QueryParam("status")
+	isReadParam := c.QueryParam("is_read")
 
 	// Build query
 	var args []interface{}
@@ -447,6 +460,11 @@ func GetAdminSentHandler(c echo.Context) error {
 		whereClause += " AND s.status = ?"
 		args = append(args, status)
 	}
+	if isReadParam != "" {
+		isRead := isReadParam == "true"
+		whereClause += " AND s.is_read_admin = ?"
+		args = append(args, isRead)
+	}
 
 	// Get total count
 	var total int
@@ -460,7 +478,7 @@ func GetAdminSentHandler(c echo.Context) error {
 	// Get sent emails
 	args = append(args, limit, offset)
 	query := fmt.Sprintf(`
-		SELECT s.id, s.user_id, u.email as user_email, s.from_email, s.to_email, s.subject, s.body_preview, s.status, s.provider, s.sent_at, s.created_at
+		SELECT s.id, s.user_id, u.email as user_email, s.from_email, s.to_email, s.subject, s.body_preview, s.is_read_admin AS is_read, s.status, s.provider, s.sent_at, s.created_at
 		FROM sent_emails s
 		JOIN users u ON s.user_id = u.id
 		WHERE %s
@@ -498,6 +516,7 @@ func GetAdminSentHandler(c echo.Context) error {
 			To:          e.ToEmail,
 			Subject:     e.Subject,
 			BodyPreview: bodyPreview,
+			IsRead:      e.IsRead,
 			Status:      e.Status,
 			Provider:    provider,
 			SentAt:      sentAt,
@@ -519,6 +538,8 @@ func GetAdminSentHandler(c echo.Context) error {
 
 // GetAdminSentDetailHandler returns a single sent email detail for admin view
 func GetAdminSentDetailHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("admin_sent_detail")
+
 	// Decode email ID
 	emailIDParam := c.Param("id")
 	emailID, err := utils.DecodeID(emailIDParam)
@@ -540,6 +561,7 @@ func GetAdminSentDetailHandler(c echo.Context) error {
 		Body        sql.NullString `db:"body"`
 		Attachments sql.NullString `db:"attachments"`
 		Provider    sql.NullString `db:"provider"`
+		IsRead      bool           `db:"is_read"`
 		Status      string         `db:"status"`
 		SentAt      sql.NullTime   `db:"sent_at"`
 		CreatedAt   time.Time      `db:"created_at"`
@@ -549,7 +571,7 @@ func GetAdminSentDetailHandler(c echo.Context) error {
 	err = config.DB.Get(&email, `
 		SELECT s.id, s.user_id, u.email as user_email,
 		       s.from_email, s.to_email, s.subject, s.body_preview, s.body,
-		       s.attachments, s.provider, s.status, s.sent_at, s.created_at
+		       s.attachments, s.provider, s.is_read_admin AS is_read, s.status, s.sent_at, s.created_at
 		FROM sent_emails s
 		JOIN users u ON s.user_id = u.id
 		WHERE s.id = ?
@@ -565,6 +587,14 @@ func GetAdminSentDetailHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Internal server error",
 		})
+	}
+
+	if !email.IsRead {
+		if _, err := config.DB.Exec(`UPDATE sent_emails SET is_read_admin = TRUE WHERE id = ?`, emailID); err != nil {
+			log.Warn("Failed to mark admin sent email as read", logger.Err(err), logger.Int("email_id", emailID))
+		} else {
+			email.IsRead = true
+		}
 	}
 
 	// Build response
@@ -600,6 +630,7 @@ func GetAdminSentDetailHandler(c echo.Context) error {
 		"body":         body,
 		"attachments":  attachments,
 		"provider":     provider,
+		"is_read":      email.IsRead,
 		"status":       email.Status,
 		"sent_at":      sentAt,
 		"created_at":   email.CreatedAt,
