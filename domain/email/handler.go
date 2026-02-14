@@ -20,6 +20,7 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/google/uuid"
@@ -57,11 +58,14 @@ type WebhookPayload struct {
 	Type      string     `json:"type"`
 }
 
-func DeductEmailLimit(userID int64) error {
-	// Increment counter
-	_, err := config.DB.Exec(`UPDATE users SET sent_emails = sent_emails - 1, last_login = NOW() WHERE id = ?`, userID)
-	return err
+// EmailQuota represents the current email sending quota for a user.
+type EmailQuota struct {
+	Sent     int        `json:"sent"`
+	Limit    int        `json:"limit"`
+	ResetsAt *time.Time `json:"resets_at"`
 }
+
+const maxDailyEmails = 3
 
 func HandleEmailBounceHandler(c echo.Context) error {
 	log := logger.Get().WithComponent("email_bounce")
@@ -187,41 +191,73 @@ func HandleEmailBounceHandler(c echo.Context) error {
 	})
 }
 
-func CheckEmailLimit(userID int64) error {
-	var user user.User
-	err := config.DB.Get(&user, `
-        SELECT sent_emails, last_email_time 
-        FROM users 
+// GetEmailQuota returns the current email quota for a user, resetting the window if expired.
+func GetEmailQuota(userID int64) (*EmailQuota, error) {
+	var u user.User
+	err := config.DB.Get(&u, `
+        SELECT sent_emails, last_email_time
+        FROM users
         WHERE id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reset the 24h window if expired or first send
+	if u.LastEmailTime == nil || time.Since(*u.LastEmailTime) >= 24*time.Hour {
+		_, err := config.DB.Exec(`
+            UPDATE users
+            SET sent_emails = 0,
+                last_email_time = NOW()
+            WHERE id = ?`, userID)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		resetsAt := now.Add(24 * time.Hour)
+		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+	}
+
+	resetsAt := u.LastEmailTime.Add(24 * time.Hour)
+	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+}
+
+func CheckEmailLimit(userID int64) error {
+	quota, err := GetEmailQuota(userID)
 	if err != nil {
 		return err
 	}
-
-	if user.SentEmails >= 3 {
-		return errors.New("daily email limit exceeded (3 emails per 24 hours)")
+	if quota.Sent >= quota.Limit {
+		return errors.New("daily email limit exceeded")
 	}
+	return nil
+}
 
-	if user.SentEmails == 0 {
-		// first time sent email
-		_, err := config.DB.Exec(`
-            UPDATE users 
-            SET sent_emails = 0, 
-                last_email_time = NOW() 
-            WHERE id = ?`, userID)
-		return err
+// GetEmailQuotaHandler returns the current email quota for the authenticated user.
+func GetEmailQuotaHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+	quota, err := GetEmailQuota(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch email quota",
+		})
 	}
+	return c.JSON(http.StatusOK, quota)
+}
 
-	// Reset counter if 24h passed
-	if time.Since(*user.LastEmailTime) > 24*time.Hour {
-		_, err := config.DB.Exec(`
-            UPDATE users 
-            SET sent_emails = 0, 
-                last_email_time = NOW() 
-            WHERE id = ?`, userID)
-		return err
+// emailLimitExceededResponse returns a standardized 429 response with quota info.
+func emailLimitExceededResponse(c echo.Context, userID int64) error {
+	resp := map[string]interface{}{
+		"error": "Daily email limit reached",
+		"code":  apperrors.ErrCodeEmailLimitExceeded,
 	}
-
-	return err
+	// Try to include resets_at for the frontend
+	quota, err := GetEmailQuota(userID)
+	if err == nil && quota.ResetsAt != nil {
+		resp["resets_at"] = quota.ResetsAt
+		resp["sent"] = quota.Sent
+		resp["limit"] = quota.Limit
+	}
+	return c.JSON(http.StatusTooManyRequests, resp)
 }
 
 // DeleteUrlAttachmentHandler handles deleting an attachment from AWS S3 based on a provided URL
@@ -291,9 +327,7 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 
 	// Check email limit with timeout
 	if err := CheckEmailLimitWithTimeout(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse JSON payload
@@ -410,9 +444,7 @@ func SendEmailHandler(c echo.Context) error {
 
 	if err := CheckEmailLimit(userID); err != nil {
 		log.Warn("Email limit exceeded", logger.Email(emailUser))
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	to := c.FormValue("to")
@@ -521,9 +553,7 @@ func SendEmailViaResendHandler(c echo.Context) error {
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse JSON payload
@@ -619,9 +649,7 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse form data
@@ -741,9 +769,7 @@ func SendEmailSMTPHandler(c echo.Context) error {
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse form data
@@ -2068,17 +2094,11 @@ func removeNonPrintable(s string) string {
 }
 
 func updateLimitSentEmails(userID int64) error {
-	// Increment counter
 	_, err := config.DB.Exec(`
-        UPDATE users 
-        SET sent_emails = sent_emails + 1,
-		last_login = NOW()
+        UPDATE users
+        SET sent_emails = sent_emails + 1
         WHERE id = ?`, userID)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func updateIsRead(emailID string) error {
@@ -2626,53 +2646,51 @@ func updateIsReadAdminWithTimeout(emailID string) error {
 }
 
 func updateLimitSentEmailsWithTimeout(userID int64) error {
-	// Increment counter with timeout
 	_, err := config.ExecuteWithTimeout(`
-        UPDATE users 
-        SET sent_emails = sent_emails + 1,
-		last_login = NOW()
+        UPDATE users
+        SET sent_emails = sent_emails + 1
+        WHERE id = ?`, 5*time.Second, userID)
+	return err
+}
+
+func GetEmailQuotaWithTimeout(userID int64) (*EmailQuota, error) {
+	var u user.User
+	err := config.GetWithTimeout(&u, `
+        SELECT sent_emails, last_email_time
+        FROM users
         WHERE id = ?`, 5*time.Second, userID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+
+	// Reset the 24h window if expired or first send
+	if u.LastEmailTime == nil || time.Since(*u.LastEmailTime) >= 24*time.Hour {
+		_, err := config.ExecuteWithTimeout(`
+            UPDATE users
+            SET sent_emails = 0,
+                last_email_time = NOW()
+            WHERE id = ?`, 5*time.Second, userID)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		resetsAt := now.Add(24 * time.Hour)
+		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+	}
+
+	resetsAt := u.LastEmailTime.Add(24 * time.Hour)
+	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
 }
 
 func CheckEmailLimitWithTimeout(userID int64) error {
-	var user user.User
-	err := config.GetWithTimeout(&user, `
-        SELECT sent_emails, last_email_time 
-        FROM users 
-        WHERE id = ?`, 5*time.Second, userID)
+	quota, err := GetEmailQuotaWithTimeout(userID)
 	if err != nil {
 		return err
 	}
-
-	if user.SentEmails >= 3 {
-		return errors.New("daily email limit exceeded (3 emails per 24 hours)")
+	if quota.Sent >= quota.Limit {
+		return errors.New("daily email limit exceeded")
 	}
-
-	if user.SentEmails == 0 {
-		// first time sent email
-		_, err := config.ExecuteWithTimeout(`
-            UPDATE users 
-            SET sent_emails = 0, 
-                last_email_time = NOW() 
-            WHERE id = ?`, 5*time.Second, userID)
-		return err
-	}
-
-	// Reset counter if 24h passed
-	if time.Since(*user.LastEmailTime) > 24*time.Hour {
-		_, err := config.ExecuteWithTimeout(`
-            UPDATE users 
-            SET sent_emails = 0, 
-                last_email_time = NOW() 
-            WHERE id = ?`, 5*time.Second, userID)
-		return err
-	}
-
-	return err
+	return nil
 }
 
 // DatabaseHealthCheckHandler provides database health status

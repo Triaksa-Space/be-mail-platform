@@ -81,6 +81,7 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.GET("/sent/list", email.GetUserSentEmailsHandler)                                                                                                      // User's own sent emails list
 	emailGroup.GET("/sent/detail/:id", email.GetUserSentEmailDetailHandler)                                                                                           // User's own sent email detail
 	emailGroup.GET("/sent", email.GetUserSentEmailsHandler)                                                                                                           // User's own sent emails
+	emailGroup.GET("/quota", email.GetEmailQuotaHandler)
 	emailGroup.POST("/send", email.SendEmailHandler)
 	emailGroup.POST("/send/resend", email.SendEmailViaResendHandler)
 	emailGroup.POST("/send/smtp", email.SendEmailSMTPHandler)
