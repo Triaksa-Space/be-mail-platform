@@ -12,13 +12,37 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/labstack/echo/v4"
+	"github.com/spf13/viper"
 )
+
+// GetDomainPrimary returns the primary domain from config (default: mailria.com)
+func GetDomainPrimary() string {
+	d := viper.GetString("DOMAIN_PRIMARY")
+	if d == "" {
+		return "mailria.com"
+	}
+	return d
+}
+
+// GetDomainSecondary returns the secondary domain from config (default: mailsaja.com)
+func GetDomainSecondary() string {
+	d := viper.GetString("DOMAIN_SECONDARY")
+	if d == "" {
+		return "mailsaja.com"
+	}
+	return d
+}
 
 // GetOverviewHandler returns the admin dashboard overview
 func GetOverviewHandler(c echo.Context) error {
 	log := logger.Get().WithComponent("admin_overview")
 
 	// Read all 4 stats from dashboard_counters in a single query
+	domainPrimary := GetDomainPrimary()
+	domainSecondary := GetDomainSecondary()
+	keyPrimary := "users_domain_" + domainPrimary
+	keySecondary := "users_domain_" + domainSecondary
+
 	type counterRow struct {
 		Key   string `db:"counter_key"`
 		Value int64  `db:"counter_value"`
@@ -26,23 +50,23 @@ func GetOverviewHandler(c echo.Context) error {
 	var counters []counterRow
 	err := config.DB.Select(&counters, `
 		SELECT counter_key, counter_value FROM dashboard_counters
-		WHERE counter_key IN ('users_domain_mailria.com','users_domain_mailsaja.com','total_inbox','total_sent')
-	`)
+		WHERE counter_key IN (?, ?, 'total_inbox', 'total_sent')
+	`, keyPrimary, keySecondary)
 	if err != nil {
 		log.Warn("Error reading dashboard counters", logger.Err(err))
 	}
 
 	var totalUsersMailria, totalUsersMailsaja, totalInbox, totalSent int64
-	for _, c := range counters {
-		switch c.Key {
-		case "users_domain_mailria.com":
-			totalUsersMailria = c.Value
-		case "users_domain_mailsaja.com":
-			totalUsersMailsaja = c.Value
+	for _, ct := range counters {
+		switch ct.Key {
+		case keyPrimary:
+			totalUsersMailria = ct.Value
+		case keySecondary:
+			totalUsersMailsaja = ct.Value
 		case "total_inbox":
-			totalInbox = c.Value
+			totalInbox = ct.Value
 		case "total_sent":
-			totalSent = c.Value
+			totalSent = ct.Value
 		}
 	}
 
