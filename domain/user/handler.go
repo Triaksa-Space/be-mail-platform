@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
@@ -383,6 +384,11 @@ func CreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
+	// Increment domain user counter
+	if parts := strings.Split(req.Email, "@"); len(parts) == 2 {
+		admin.IncrementCounter("users_domain_"+parts[1], 1)
+	}
+
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully."})
 }
 
@@ -602,6 +608,17 @@ func BulkCreateUserHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
+	// Increment domain user counters for created users
+	domainCounts := make(map[string]int64)
+	for _, u := range createdUsers {
+		if parts := strings.Split(u["Email"], "@"); len(parts) == 2 {
+			domainCounts[parts[1]]++
+		}
+	}
+	for domain, count := range domainCounts {
+		admin.IncrementCounter("users_domain_"+domain, count)
+	}
+
 	log.Info("Bulk user creation completed",
 		logger.Int("created", len(createdUsers)),
 		logger.Int("skipped", len(skippedUsers)),
@@ -728,6 +745,11 @@ func DeleteUserHandler(c echo.Context) error {
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction."})
+	}
+
+	// Decrement domain user counter
+	if parts := strings.Split(userEmail, "@"); len(parts) == 2 {
+		admin.IncrementCounter("users_domain_"+parts[1], -1)
 	}
 
 	// TODO: SEARCH HIS ATTACHMENT AND DELETE IT
@@ -1196,6 +1218,17 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		log.Error("Failed to commit transaction", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	// Increment domain user counters for created users
+	domainCountsV2 := make(map[string]int64)
+	for _, u := range createdUsers {
+		if parts := strings.Split(u["email"], "@"); len(parts) == 2 {
+			domainCountsV2[parts[1]]++
+		}
+	}
+	for domain, count := range domainCountsV2 {
+		admin.IncrementCounter("users_domain_"+domain, count)
 	}
 
 	log.Info("Bulk user creation v2 completed",

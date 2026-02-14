@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
@@ -184,6 +185,8 @@ func HandleEmailBounceHandler(c echo.Context) error {
 			"error": "Failed to insert bounce email into DB" + err.Error(),
 		})
 	}
+
+	admin.IncrementCounter("total_inbox", 1)
 
 	log.Info("Email bounce processed successfully", logger.String("email_id", payload.Data.EmailID))
 	return c.JSON(http.StatusOK, map[string]string{
@@ -523,6 +526,8 @@ func SendEmailHandler(c echo.Context) error {
 		userID, emailUser, to, subject, preview, body, attachmentsJSON)
 	if err != nil {
 		log.Warn("Email sent but failed to save to sent_emails", logger.Err(err))
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
 	if err := updateLastLogin(userID); err != nil {
@@ -616,6 +621,8 @@ func SendEmailViaResendHandler(c echo.Context) error {
 	if err != nil {
 		fmt.Println("Email sent but failed to save to sent_emails:", err)
 		// Don't return error since email was sent successfully
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login with timeout
@@ -736,6 +743,8 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 		userID, emailUser, to, subject, preview, body, attachmentsJSON)
 	if err != nil {
 		fmt.Println("Email sent but failed to save to sent_emails:", err)
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login
@@ -856,6 +865,8 @@ func SendEmailSMTPHandler(c echo.Context) error {
 		userID, emailUser, to, subject, preview, body, attachmentsJSON)
 	if err != nil {
 		fmt.Println("Email sent but failed to save to sent_emails:", err)
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login
@@ -1961,6 +1972,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 					continue
 				}
 
+				admin.IncrementCounter("total_inbox", 1)
 				stats.NewEmails++
 			}
 		}
@@ -2251,6 +2263,8 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 			fmt.Printf("processIncomingEmails: Failed to insert email %s into DB: %v\n", email.ID, err)
 			continue
 		}
+
+		admin.IncrementCounter("total_inbox", 1)
 
 		// // Mark the raw email as processed
 		// _, err = config.DB.Exec(`
@@ -2585,6 +2599,10 @@ func SaveSentEmail(userID int64, fromEmail, toEmail, subject, body string, attac
 		INSERT INTO sent_emails (user_id, from_email, to_email, subject, body_preview, body, attachments, provider, provider_message_id, status, sent_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
 	`, userID, fromEmail, toEmail, subject, bodyPreview, body, attachmentsJSON, provider, providerMsgID, status)
+
+	if err == nil {
+		admin.IncrementCounter("total_sent", 1)
+	}
 
 	return err
 }

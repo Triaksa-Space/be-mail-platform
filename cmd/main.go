@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
 	"github.com/Triaksa-Space/be-mail-platform/domain/email"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
@@ -116,6 +117,9 @@ func runServer() {
 		AllowCredentials: true,
 		MaxAge:           86400,
 	}))
+
+	// Initialize dashboard counters from actual DB counts
+	initDashboardCounters(log)
 
 	// Register routes
 	routes.RegisterRoutes(e)
@@ -377,4 +381,49 @@ func runProcess() {
 	// Give worker time to finish current batch
 	time.Sleep(2 * time.Second)
 	log.Info("Process stopped gracefully")
+}
+
+// initDashboardCounters seeds dashboard_counters from actual DB counts
+func initDashboardCounters(log logger.Logger) {
+	log = log.WithComponent("dashboard_counters")
+
+	// Initialize domain user counters (mailria.com, mailsaja.com, etc.)
+	if err := admin.InitializeDomainCounters(); err != nil {
+		log.Error("Failed to initialize domain counters", err)
+	} else {
+		log.Info("Domain counters initialized")
+	}
+
+	// Seed total_inbox counter
+	var totalInbox int64
+	if err := config.DB.Get(&totalInbox, "SELECT COUNT(*) FROM emails"); err != nil {
+		log.Error("Failed to count emails for counter init", err)
+	} else {
+		if _, err := config.DB.Exec(`
+			INSERT INTO dashboard_counters (counter_key, counter_value, updated_at)
+			VALUES ('total_inbox', ?, NOW())
+			ON DUPLICATE KEY UPDATE counter_value = ?, updated_at = NOW()
+		`, totalInbox, totalInbox); err != nil {
+			log.Error("Failed to seed total_inbox counter", err)
+		}
+	}
+
+	// Seed total_sent counter
+	var totalSent int64
+	if err := config.DB.Get(&totalSent, "SELECT COUNT(*) FROM sent_emails"); err != nil {
+		log.Error("Failed to count sent_emails for counter init", err)
+	} else {
+		if _, err := config.DB.Exec(`
+			INSERT INTO dashboard_counters (counter_key, counter_value, updated_at)
+			VALUES ('total_sent', ?, NOW())
+			ON DUPLICATE KEY UPDATE counter_value = ?, updated_at = NOW()
+		`, totalSent, totalSent); err != nil {
+			log.Error("Failed to seed total_sent counter", err)
+		}
+	}
+
+	log.Info("Dashboard counters initialized",
+		logger.Int64("total_inbox", totalInbox),
+		logger.Int64("total_sent", totalSent),
+	)
 }

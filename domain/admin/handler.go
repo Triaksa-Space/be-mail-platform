@@ -18,42 +18,32 @@ import (
 func GetOverviewHandler(c echo.Context) error {
 	log := logger.Get().WithComponent("admin_overview")
 
-	// Get users count for mailria.com
-	var totalUsersMailria int64
-	err := config.DB.Get(&totalUsersMailria, `
-		SELECT COUNT(*) FROM users
-		WHERE role_id = 1 AND email LIKE '%@mailria.com'
+	// Read all 4 stats from dashboard_counters in a single query
+	type counterRow struct {
+		Key   string `db:"counter_key"`
+		Value int64  `db:"counter_value"`
+	}
+	var counters []counterRow
+	err := config.DB.Select(&counters, `
+		SELECT counter_key, counter_value FROM dashboard_counters
+		WHERE counter_key IN ('users_domain_mailria.com','users_domain_mailsaja.com','total_inbox','total_sent')
 	`)
 	if err != nil {
-		log.Warn("Error counting mailria users", logger.Err(err))
-		totalUsersMailria = 0
+		log.Warn("Error reading dashboard counters", logger.Err(err))
 	}
 
-	// Get users count for mailsaja.com
-	var totalUsersMailsaja int64
-	err = config.DB.Get(&totalUsersMailsaja, `
-		SELECT COUNT(*) FROM users
-		WHERE role_id = 1 AND email LIKE '%@mailsaja.com'
-	`)
-	if err != nil {
-		log.Warn("Error counting mailsaja users", logger.Err(err))
-		totalUsersMailsaja = 0
-	}
-
-	// Get total inbox count
-	var totalInbox int64
-	err = config.DB.Get(&totalInbox, "SELECT COUNT(*) FROM emails")
-	if err != nil {
-		log.Warn("Error counting inbox", logger.Err(err))
-		totalInbox = 0
-	}
-
-	// Get total sent count
-	var totalSent int64
-	err = config.DB.Get(&totalSent, "SELECT COUNT(*) FROM sent_emails")
-	if err != nil {
-		log.Warn("Error counting sent", logger.Err(err))
-		totalSent = 0
+	var totalUsersMailria, totalUsersMailsaja, totalInbox, totalSent int64
+	for _, c := range counters {
+		switch c.Key {
+		case "users_domain_mailria.com":
+			totalUsersMailria = c.Value
+		case "users_domain_mailsaja.com":
+			totalUsersMailsaja = c.Value
+		case "total_inbox":
+			totalInbox = c.Value
+		case "total_sent":
+			totalSent = c.Value
+		}
 	}
 
 	// Get recent inbox emails with full details
