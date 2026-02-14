@@ -30,6 +30,7 @@ var ValidPermissions = map[string]bool{
 type AdminUser struct {
 	ID           string     `json:"id"`
 	Username     string     `json:"username"`
+	Password     string     `json:"password,omitempty"`
 	LastActiveAt *time.Time `json:"last_active_at"`
 	IsOnline     bool       `json:"is_online"`
 	Permissions  []string   `json:"permissions"`
@@ -38,10 +39,11 @@ type AdminUser struct {
 
 // AdminUserDB represents an admin user from the database
 type AdminUserDB struct {
-	ID           int64          `db:"id"`
-	Email        string         `db:"email"`
-	LastLogin    sql.NullTime   `db:"last_login"`
-	CreatedAt    time.Time      `db:"created_at"`
+	ID                int64            `db:"id"`
+	Email             string           `db:"email"`
+	EncryptedPassword sql.NullString   `db:"encrypted_password"`
+	LastLogin         sql.NullTime     `db:"last_login"`
+	CreatedAt         time.Time        `db:"created_at"`
 }
 
 // ListAdminsResponse represents the list admins API response
@@ -214,7 +216,7 @@ func GetAdminHandler(c echo.Context) error {
 	// Get admin from database
 	var admin AdminUserDB
 	err = config.DB.Get(&admin, `
-		SELECT id, email, last_login, created_at
+		SELECT id, email, encrypted_password, last_login, created_at
 		FROM users
 		WHERE id = ? AND role_id = 2
 	`, adminID)
@@ -240,9 +242,16 @@ func GetAdminHandler(c echo.Context) error {
 		isOnline = time.Since(admin.LastLogin.Time) < 15*time.Minute
 	}
 
+	// Decrypt password for SuperAdmin viewing
+	var decryptedPassword string
+	if admin.EncryptedPassword.Valid {
+		decryptedPassword, _ = utils.DecryptAES(admin.EncryptedPassword.String)
+	}
+
 	return c.JSON(http.StatusOK, AdminUser{
 		ID:           utils.EncodeID(int(admin.ID)),
 		Username:     admin.Email,
+		Password:     decryptedPassword,
 		LastActiveAt: lastActiveAt,
 		IsOnline:     isOnline,
 		Permissions:  permissions,
@@ -313,6 +322,13 @@ func CreateAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 	}
 
+	// Encrypt password for SuperAdmin viewing
+	encryptedPassword, err := utils.EncryptAES(req.Password)
+	if err != nil {
+		fmt.Println("Error encrypting password:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
 	// Start transaction
 	tx, err := config.DB.Begin()
 	if err != nil {
@@ -322,9 +338,9 @@ func CreateAdminHandler(c echo.Context) error {
 
 	// Insert admin user
 	result, err := tx.Exec(`
-		INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, created_by_name, updated_by, updated_by_name)
-		VALUES (?, ?, 2, NOW(), NOW(), ?, ?, ?, ?)
-	`, req.Username, hashedPassword, userID, creatorEmail, userID, creatorEmail)
+		INSERT INTO users (email, password, encrypted_password, role_id, created_at, updated_at, created_by, created_by_name, updated_by, updated_by_name)
+		VALUES (?, ?, ?, 2, NOW(), NOW(), ?, ?, ?, ?)
+	`, req.Username, hashedPassword, encryptedPassword, userID, creatorEmail, userID, creatorEmail)
 
 	if err != nil {
 		fmt.Println("Error creating admin:", err)
@@ -456,7 +472,13 @@ func UpdateAdminHandler(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
 		}
 
-		_, err = tx.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", hashedPassword, adminID)
+		encryptedPassword, err := utils.EncryptAES(req.Password)
+		if err != nil {
+			fmt.Println("Error encrypting password:", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		}
+
+		_, err = tx.Exec("UPDATE users SET password = ?, encrypted_password = ?, updated_at = NOW() WHERE id = ?", hashedPassword, encryptedPassword, adminID)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update password"})
 		}
