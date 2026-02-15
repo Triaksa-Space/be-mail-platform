@@ -13,6 +13,7 @@ import (
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
+	"github.com/Triaksa-Space/be-mail-platform/domain/auth"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
@@ -99,7 +100,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		))
 	}
 
-	// Revoke all refresh tokens for target user (force logout on all devices)
+	// Revoke all refresh tokens for target user (force logout on all other devices)
 	if _, err := config.DB.Exec(`
 		UPDATE refresh_tokens SET revoked_at = NOW()
 		WHERE user_id = ? AND revoked_at IS NULL
@@ -112,6 +113,50 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 	}
 
 	log.Info("Admin password changed successfully", logger.Int("target_user_id", req.UserID))
+
+	// If admin changed their own password, return new tokens to keep current session alive
+	if int64(req.UserID) == superAdminID {
+		var newTokenVersion int64
+		var email string
+		var roleID int
+		err = config.DB.QueryRow("SELECT token_version, email, role_id FROM users WHERE id = ?", req.UserID).Scan(&newTokenVersion, &email, &roleID)
+		if err != nil {
+			log.Error("Failed to fetch updated user data", err)
+			return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
+		}
+
+		accessToken, err := utils.GenerateAccessToken(int64(req.UserID), email, roleID, newTokenVersion)
+		if err != nil {
+			log.Error("Failed to generate new access token", err)
+			return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
+		}
+
+		refreshToken, err := auth.GenerateRefreshToken()
+		if err != nil {
+			log.Error("Failed to generate new refresh token", err)
+			return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
+		}
+
+		tokenHash := auth.HashToken(refreshToken)
+		expiresAt := time.Now().Add(auth.RefreshTokenExpiry)
+		userAgent := c.Request().UserAgent()
+		ipAddress := c.RealIP()
+		if _, err := config.DB.Exec(`
+			INSERT INTO refresh_tokens (user_id, token_hash, remember_me, expires_at, created_at, user_agent, ip_address)
+			VALUES (?, ?, false, ?, NOW(), ?, ?)
+		`, int64(req.UserID), tokenHash, expiresAt, userAgent, ipAddress); err != nil {
+			log.Warn("Failed to store new refresh token", logger.Err(err))
+		}
+
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"message":       "Password updated successfully.",
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"expires_in":    auth.AccessTokenExpirySeconds,
+			"token_type":    "Bearer",
+		})
+	}
+
 	return c.JSON(http.StatusOK, map[string]string{"message": "Password updated successfully."})
 }
 
@@ -233,7 +278,7 @@ func ChangePasswordHandler(c echo.Context) error {
 		))
 	}
 
-	// Revoke all refresh tokens (force logout on all devices)
+	// Revoke all refresh tokens (force logout on all other devices)
 	if _, err := config.DB.Exec(`
 		UPDATE refresh_tokens SET revoked_at = NOW()
 		WHERE user_id = ? AND revoked_at IS NULL
@@ -241,12 +286,64 @@ func ChangePasswordHandler(c echo.Context) error {
 		log.Warn("Failed to revoke refresh tokens after password change", logger.Err(err))
 	}
 
+	// Fetch updated token_version and generate new tokens for current device
+	var newTokenVersion int64
+	var email string
+	var roleID int
+	err = config.DB.QueryRow("SELECT token_version, email, role_id FROM users WHERE id = ?", req.UserID).Scan(&newTokenVersion, &email, &roleID)
+	if err != nil {
+		log.Error("Failed to fetch updated user data", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error.",
+			err,
+		))
+	}
+
+	accessToken, err := utils.GenerateAccessToken(int64(req.UserID), email, roleID, newTokenVersion)
+	if err != nil {
+		log.Error("Failed to generate new access token", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error.",
+			err,
+		))
+	}
+
+	refreshToken, err := auth.GenerateRefreshToken()
+	if err != nil {
+		log.Error("Failed to generate new refresh token", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error.",
+			err,
+		))
+	}
+
+	// Store new refresh token for current device
+	tokenHash := auth.HashToken(refreshToken)
+	expiresAt := time.Now().Add(auth.RefreshTokenExpiry)
+	userAgent := c.Request().UserAgent()
+	ipAddress := c.RealIP()
+	if _, err := config.DB.Exec(`
+		INSERT INTO refresh_tokens (user_id, token_hash, remember_me, expires_at, created_at, user_agent, ip_address)
+		VALUES (?, ?, false, ?, NOW(), ?, ?)
+	`, int64(req.UserID), tokenHash, expiresAt, userAgent, ipAddress); err != nil {
+		log.Warn("Failed to store new refresh token after password change", logger.Err(err))
+	}
+
 	if err := updateLastLogin(userID); err != nil {
 		log.Warn("Failed to update last login", logger.Err(err))
 	}
 
 	log.Info("Password changed successfully")
-	return c.JSON(http.StatusOK, map[string]string{"message": "Password changed successfully."})
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":       "Password changed successfully.",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_in":    auth.AccessTokenExpirySeconds,
+		"token_type":    "Bearer",
+	})
 }
 
 func CreateUserAdminHandler(c echo.Context) error {
@@ -1098,7 +1195,7 @@ func SetBindingEmailHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
 	}
 
-	// Revoke all refresh tokens (force logout on all devices)
+	// Revoke all refresh tokens (force logout on all other devices)
 	log := logger.Get().WithComponent("user").WithUserID(userID)
 	if _, err := config.DB.Exec(`
 		UPDATE refresh_tokens SET revoked_at = NOW()
@@ -1107,8 +1204,46 @@ func SetBindingEmailHandler(c echo.Context) error {
 		log.Warn("Failed to revoke refresh tokens after binding email change", logger.Err(err))
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{
-		"message": "Binding email updated successfully.",
+	// Fetch updated token_version and generate new tokens for current device
+	var newTokenVersion int64
+	var email string
+	var roleID int
+	err = config.DB.QueryRow("SELECT token_version, email, role_id FROM users WHERE id = ?", userID).Scan(&newTokenVersion, &email, &roleID)
+	if err != nil {
+		log.Error("Failed to fetch updated user data after binding email change", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
+	}
+
+	accessToken, err := utils.GenerateAccessToken(userID, email, roleID, newTokenVersion)
+	if err != nil {
+		log.Error("Failed to generate new access token", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
+	}
+
+	refreshToken, err := auth.GenerateRefreshToken()
+	if err != nil {
+		log.Error("Failed to generate new refresh token", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
+	}
+
+	// Store new refresh token for current device
+	tokenHash := auth.HashToken(refreshToken)
+	expiresAt := time.Now().Add(auth.RefreshTokenExpiry)
+	userAgent := c.Request().UserAgent()
+	ipAddress := c.RealIP()
+	if _, err := config.DB.Exec(`
+		INSERT INTO refresh_tokens (user_id, token_hash, remember_me, expires_at, created_at, user_agent, ip_address)
+		VALUES (?, ?, false, ?, NOW(), ?, ?)
+	`, userID, tokenHash, expiresAt, userAgent, ipAddress); err != nil {
+		log.Warn("Failed to store new refresh token after binding email change", logger.Err(err))
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":       "Binding email updated successfully.",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_in":    auth.AccessTokenExpirySeconds,
+		"token_type":    "Bearer",
 	})
 }
 

@@ -170,7 +170,7 @@ func LoginHandler(c echo.Context) error {
 	}
 
 	// Generate refresh token
-	refreshToken, err := generateRefreshToken()
+	refreshToken, err := GenerateRefreshToken()
 	if err != nil {
 		log.Error("Failed to generate refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
@@ -189,7 +189,7 @@ func LoginHandler(c echo.Context) error {
 	}
 
 	// Store refresh token hash in database
-	tokenHash := hashToken(refreshToken)
+	tokenHash := HashToken(refreshToken)
 	userAgent := c.Request().UserAgent()
 	ipAddress := c.RealIP()
 
@@ -254,7 +254,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		))
 	}
 
-	tokenHash := hashToken(req.RefreshToken)
+	tokenHash := HashToken(req.RefreshToken)
 	now := time.Now()
 
 	// Find the refresh token
@@ -337,7 +337,7 @@ func RefreshTokenHandler(c echo.Context) error {
 	}
 
 	// Generate new refresh token (rotation)
-	newRefreshToken, err := generateRefreshToken()
+	newRefreshToken, err := GenerateRefreshToken()
 	if err != nil {
 		log.Error("Failed to generate refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
@@ -356,7 +356,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		newExpiresAt = storedToken.ExpiresAt
 	}
 
-	newTokenHash := hashToken(newRefreshToken)
+	newTokenHash := HashToken(newRefreshToken)
 	userAgent := c.Request().UserAgent()
 	ipAddress := c.RealIP()
 
@@ -443,7 +443,7 @@ func LogoutHandler(c echo.Context) error {
 
 	if req.RefreshToken != "" {
 		// Revoke specific refresh token
-		tokenHash := hashToken(req.RefreshToken)
+		tokenHash := HashToken(req.RefreshToken)
 		_, err := config.DB.Exec(`
 			UPDATE refresh_tokens
 			SET revoked_at = ?
@@ -479,8 +479,8 @@ func LogoutHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "Successfully logged out."})
 }
 
-// generateRefreshToken generates a cryptographically secure random token
-func generateRefreshToken() (string, error) {
+// GenerateRefreshToken generates a cryptographically random refresh token
+func GenerateRefreshToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
@@ -488,8 +488,8 @@ func generateRefreshToken() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-// hashToken creates a SHA256 hash of the token for storage
-func hashToken(token string) string {
+// HashToken creates a SHA256 hash of the token for storage
+func HashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
 }
