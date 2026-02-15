@@ -99,6 +99,14 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		))
 	}
 
+	// Revoke all refresh tokens for target user (force logout on all devices)
+	if _, err := config.DB.Exec(`
+		UPDATE refresh_tokens SET revoked_at = NOW()
+		WHERE user_id = ? AND revoked_at IS NULL
+	`, req.UserID); err != nil {
+		log.Warn("Failed to revoke refresh tokens after admin password change", logger.Err(err))
+	}
+
 	if err := updateLastLogin(superAdminID); err != nil {
 		log.Warn("Failed to update last login", logger.Err(err))
 	}
@@ -222,6 +230,14 @@ func ChangePasswordHandler(c echo.Context) error {
 			"Internal server error.",
 			err,
 		))
+	}
+
+	// Revoke all refresh tokens (force logout on all devices)
+	if _, err := config.DB.Exec(`
+		UPDATE refresh_tokens SET revoked_at = NOW()
+		WHERE user_id = ? AND revoked_at IS NULL
+	`, int64(req.UserID)); err != nil {
+		log.Warn("Failed to revoke refresh tokens after password change", logger.Err(err))
 	}
 
 	if err := updateLastLogin(userID); err != nil {
@@ -1079,6 +1095,15 @@ func SetBindingEmailHandler(c echo.Context) error {
 	if err != nil {
 		fmt.Println("Error updating binding email:", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
+	}
+
+	// Revoke all refresh tokens (force logout on all devices)
+	log := logger.Get().WithComponent("user").WithUserID(userID)
+	if _, err := config.DB.Exec(`
+		UPDATE refresh_tokens SET revoked_at = NOW()
+		WHERE user_id = ? AND revoked_at IS NULL
+	`, userID); err != nil {
+		log.Warn("Failed to revoke refresh tokens after binding email change", logger.Err(err))
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
