@@ -22,7 +22,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		println("Usage: go run cmd/main.go [server|sync|sync_process|sync_sent|process]")
+		println("Usage: go run cmd/main.go [server|sync|sync_process|sync_sent|process|retention]")
 		os.Exit(1)
 	}
 
@@ -48,6 +48,8 @@ func main() {
 		runSyncSent()
 	case "process":
 		runProcess()
+	case "retention":
+		runRetention()
 	default:
 		log.Fatal("Invalid command", nil, logger.String("command", os.Args[1]))
 	}
@@ -186,6 +188,48 @@ func runSyncSent() {
 	log.Info("Received shutdown signal", logger.String("signal", sig.String()))
 	cancel()
 	log.Info("Sync sent stopped gracefully")
+}
+
+func runRetention() {
+	log := logger.Get().WithComponent("retention")
+	log.Info("Starting data retention cron", logger.Duration("interval", 24*time.Hour))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Run immediately on start
+	log.Info("Running initial data retention cycle...")
+	if err := email.RunDataRetention(); err != nil {
+		log.Error("Initial data retention failed", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(60 * time.Second) //24 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info("Retention worker stopping")
+				return
+			case <-ticker.C:
+				log.Info("Starting scheduled data retention cycle...")
+				if err := email.RunDataRetention(); err != nil {
+					log.Error("Data retention failed", err)
+				}
+			}
+		}
+	}()
+
+	// Wait for shutdown signal
+	sig := <-sigChan
+	log.Info("Received shutdown signal", logger.String("signal", sig.String()))
+	cancel()
+	log.Info("Retention stopped gracefully")
 }
 
 func runSync() {
