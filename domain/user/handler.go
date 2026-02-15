@@ -89,7 +89,7 @@ func ChangePasswordAdminHandler(c echo.Context) error {
 		))
 	}
 
-	_, err = config.DB.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", newHashedPassword, req.UserID)
+	_, err = config.DB.Exec("UPDATE users SET password = ?, token_version = token_version + 1, updated_at = NOW() WHERE id = ?", newHashedPassword, req.UserID)
 	if err != nil {
 		log.Error("Failed to update password", err, logger.Int("target_user_id", req.UserID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
@@ -219,6 +219,7 @@ func ChangePasswordHandler(c echo.Context) error {
 	_, err = config.DB.Exec(`
         UPDATE users
         SET password = ?,
+            token_version = token_version + 1,
             failed_attempts = 0,
             last_failed_at = NULL,
             updated_at = NOW()
@@ -1089,7 +1090,7 @@ func SetBindingEmailHandler(c echo.Context) error {
 	// Update the user's binding email
 	_, err := config.DB.Exec(`
 		UPDATE users
-		SET binding_email = ?, updated_at = NOW()
+		SET binding_email = ?, token_version = token_version + 1, updated_at = NOW()
 		WHERE id = ?
 	`, req.BindingEmail, userID)
 	if err != nil {

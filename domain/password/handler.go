@@ -599,7 +599,7 @@ func ResetPasswordHandler(c echo.Context) error {
 	// Update password
 	_, err = tx.Exec(`
 		UPDATE users
-		SET password = ?, updated_at = NOW()
+		SET password = ?, token_version = token_version + 1, updated_at = NOW()
 		WHERE id = ?
 	`, hashedPassword, user.ID)
 	if err != nil {

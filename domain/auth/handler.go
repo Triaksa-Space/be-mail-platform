@@ -18,10 +18,11 @@ import (
 
 // User struct for database queries
 type User struct {
-	ID       int64  `db:"id"`
-	Email    string `db:"email"`
-	Password string `db:"password"`
-	RoleID   int    `db:"role_id"`
+	ID           int64  `db:"id"`
+	Email        string `db:"email"`
+	Password     string `db:"password"`
+	RoleID       int    `db:"role_id"`
+	TokenVersion int64  `db:"token_version"`
 }
 
 // LoginHandler handles user login with refresh token support
@@ -124,7 +125,7 @@ func LoginHandler(c echo.Context) error {
 
 	// Fetch user from the database
 	var user User
-	err = config.DB.Get(&user, "SELECT id, email, password, role_id FROM users WHERE email = ?", req.Email)
+	err = config.DB.Get(&user, "SELECT id, email, password, role_id, token_version FROM users WHERE email = ?", req.Email)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return handleFailedAttempt(c, log, req.Email, attempts.FailedAttempts, now)
@@ -158,7 +159,7 @@ func LoginHandler(c echo.Context) error {
 	}
 
 	// Generate access token
-	accessToken, err := utils.GenerateAccessToken(user.ID, user.Email, user.RoleID)
+	accessToken, err := utils.GenerateAccessToken(user.ID, user.Email, user.RoleID, user.TokenVersion)
 	if err != nil {
 		log.Error("Failed to generate access token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
@@ -314,7 +315,7 @@ func RefreshTokenHandler(c echo.Context) error {
 
 	// Get user information
 	var user User
-	err = config.DB.Get(&user, "SELECT id, email, role_id FROM users WHERE id = ?", storedToken.UserID)
+	err = config.DB.Get(&user, "SELECT id, email, role_id, token_version FROM users WHERE id = ?", storedToken.UserID)
 	if err != nil {
 		log.Error("Failed to fetch user for token refresh", err, logger.UserID(storedToken.UserID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
@@ -325,7 +326,7 @@ func RefreshTokenHandler(c echo.Context) error {
 	}
 
 	// Generate new access token
-	accessToken, err := utils.GenerateAccessToken(user.ID, user.Email, user.RoleID)
+	accessToken, err := utils.GenerateAccessToken(user.ID, user.Email, user.RoleID, user.TokenVersion)
 	if err != nil {
 		log.Error("Failed to generate access token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
