@@ -1500,6 +1500,25 @@ func UploadAttachmentHandler(c echo.Context) error {
 	}
 
 	file := files[0]
+
+	// Block dangerous file extensions
+	blockedExts := []string{
+		".exe", ".bat", ".cmd", ".com", ".msi", ".scr", ".pif",
+		".sh", ".bash", ".csh", ".ksh", ".zsh",
+		".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1",
+		".reg", ".inf", ".hta", ".cpl", ".msc",
+		".dll", ".sys", ".drv",
+		".lnk", ".url",
+	}
+	ext := strings.ToLower(path.Ext(file.Filename))
+	for _, blocked := range blockedExts {
+		if ext == blocked {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("File type %s is not allowed", ext),
+			})
+		}
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
