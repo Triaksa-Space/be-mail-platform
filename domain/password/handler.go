@@ -205,8 +205,8 @@ func ForgotPasswordHandler(c echo.Context) error {
               <td style="padding-bottom:16px;">
                 <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="color:#4B5563; font-family:Roboto, Arial, sans-serif; font-size:14px; font-style:normal; font-weight:400; line-height:20px; text-align:center;">
-                      %s
+                    <td style="color:#027AEA; font-family:Roboto, Arial, sans-serif; font-size:18px !important; font-style:normal !important; font-weight:600 !important; line-height:28px; mso-line-height-rule:exactly; text-align:center;">
+                      <span style="font-size:18px !important; font-style:normal !important; font-weight:600 !important; line-height:28px;">%s</span>
                     </td>
                   </tr>
                 </table>
