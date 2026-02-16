@@ -171,24 +171,33 @@ func ForgotPasswordHandler(c echo.Context) error {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mailria Password Reset</title>
+    <style>
+      a[x-apple-data-detectors],
+      u + #body a,
+      #MessageViewBody a {
+        color: inherit !important;
+        text-decoration: none !important;
+        font: inherit !important;
+      }
+    </style>
   </head>
-  <body style="margin:0; padding:0; background-color:#f3f4f6;">
+  <body id="body" style="margin:0; padding:0; background-color:#f3f4f6;">
     <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="background-color:#f3f4f6; padding:32px 0;">
       <tr>
         <td align="center">
-          <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="max-width:420px; width:100%%; background-color:#ffffff; border-radius:8px; box-shadow:0 10px 25px -8px rgba(16,24,40,0.18); padding:24px; font-family:Roboto, Arial, sans-serif;box-shadow: 0 6px 15px -2px rgba(16, 24, 40, 0.08), 0 6px 15px -2px rgba(16, 24, 40, 0.08);">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="max-width:420px; width:100%%; background-color:#ffffff; border-radius:8px; box-shadow:0 10px 25px -8px rgba(16,24,40,0.18); padding:16px; font-family:Roboto, Arial, sans-serif;box-shadow: 0 6px 15px -2px rgba(16, 24, 40, 0.08), 0 6px 15px -2px rgba(16, 24, 40, 0.08);">
             <tr>
               <td style="padding-bottom:20px;">
-                <img src="https://image2url.com/r2/default/images/1770964542184-17ee65b7-ac63-43cf-8e26-27bad2781b1d.png" width="112" height="40" alt="Mailria" style="display:block; border:0; outline:none; text-decoration:none;" />
+                <img src="https://image2url.com/r2/default/images/1771230290196-42620d10-b63b-46d7-8b1d-5879eb9c7830.png" width="112" height="40" alt="Mailria" style="display:block; border:0; outline:none; text-decoration:none;" />
               </td>
             </tr>
             <tr>
-              <td style="color:#111827; font-size:18px; font-weight:600; line-height:26px; padding-bottom:16px;">
-                Hello %s,
+              <td style="color:#1F2937; font-family:Roboto, Arial, sans-serif; font-size:18px; font-style:normal; font-weight:600; line-height:24px; letter-spacing:-0.36px; padding-bottom:16px;">
+                Hello <span style="color:#1F2937; text-decoration:none;">%s</span>,
               </td>
             </tr>
             <tr>
-              <td style="color:#4b5563; font-size:14px; line-height:22px; padding-bottom:16px;">
+              <td style="color:#4B5563; font-family:Roboto, Arial, sans-serif; font-size:14px; font-style:normal; font-weight:400; line-height:20px; padding-bottom:16px;">
                 You requested to reset your password. Use the verification code below to continue.
               </td>
             </tr>
@@ -196,7 +205,7 @@ func ForgotPasswordHandler(c echo.Context) error {
               <td style="padding-bottom:16px;">
                 <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="color:#0284c7; font-size:20px; font-weight:700; letter-spacing:2px; text-align:center;">
+                    <td style="color:#4B5563; font-family:Roboto, Arial, sans-serif; font-size:14px; font-style:normal; font-weight:400; line-height:20px; text-align:center;">
                       %s
                     </td>
                   </tr>
@@ -204,12 +213,12 @@ func ForgotPasswordHandler(c echo.Context) error {
               </td>
             </tr>
             <tr>
-              <td style="color:#4b5563; font-size:13px; line-height:20px; padding-bottom:16px;">
+              <td style="color:#4B5563; font-family:Roboto, Arial, sans-serif; font-size:14px; font-style:normal; font-weight:400; line-height:20px; padding-bottom:16px;">
                 This code will expire in <strong>30 minutes.</strong>
               </td>
             </tr>
             <tr>
-              <td style="color:#4b5563; font-size:13px; line-height:20px; padding-bottom:16px;">
+              <td style="color:#4B5563; font-family:Roboto, Arial, sans-serif; font-size:14px; font-style:normal; font-weight:400; line-height:20px; padding-bottom:16px;">
                 If you didn’t request this, please ignore this email.
               </td>
             </tr>
