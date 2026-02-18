@@ -375,7 +375,7 @@ func VerifyCodeHandler(c echo.Context) error {
 		log.Debug("Verify code attempted for unknown user", logger.Email(req.Email))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid code.",
+			"message": "Invalid code",
 		})
 	}
 
@@ -386,7 +386,7 @@ func VerifyCodeHandler(c echo.Context) error {
 		log.Debug("Verify code attempted by non-user role", logger.Int("role_id", user.RoleID))
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid code.",
+			"message": "Invalid code",
 		})
 	}
 
@@ -406,7 +406,7 @@ func VerifyCodeHandler(c echo.Context) error {
 			log.Debug("No valid reset code found")
 			return c.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error":   "invalid_code",
-				"message": "Invalid code.",
+				"message": "Invalid code",
 			})
 		}
 		log.Error("Error fetching reset code", err)
@@ -426,7 +426,7 @@ func VerifyCodeHandler(c echo.Context) error {
 	if resetCode.ExpiresAt.Before(now) {
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid code.",
+			"message": "Invalid code",
 		})
 	}
 
@@ -483,7 +483,7 @@ func VerifyCodeHandler(c echo.Context) error {
 
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error":   "invalid_code",
-			"message": "Invalid code.",
+			"message": "Invalid code",
 		})
 	}
 
