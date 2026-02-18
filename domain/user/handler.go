@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"regexp"
@@ -670,8 +671,13 @@ func BulkCreateUserHandler(c echo.Context) error {
 		finalUsernames = append(finalUsernames, availableUsername)
 	}
 
+	plainPassword, err := resolveBulkPasswordSpec(req.Password)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
 	// Step 4: Hash password once (same for all users in this batch)
-	hashedPassword, err := utils.HashPassword(req.Password)
+	hashedPassword, err := utils.HashPassword(plainPassword)
 	if err != nil {
 		log.Error("Failed to hash password", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -713,7 +719,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 		createdUsers = append(createdUsers, map[string]string{
 			"No":       fmt.Sprintf("%d", i+1),
 			"Email":    username,
-			"Password": req.Password,
+			"Password": plainPassword,
 		})
 	}
 
@@ -738,31 +744,17 @@ func BulkCreateUserHandler(c echo.Context) error {
 		logger.Int("skipped", len(skippedUsers)),
 	)
 
-	// Generate the email body with enhanced styling
-	var emailBody strings.Builder
-	emailBody.WriteString(`
-    <table style="width: 100%; border-collapse: collapse;">
-        <tr style="background-color: #f2f2f2;">
-            <th style="border: 1px solid #ddd; padding: 8px; width: 50px; text-align: center;">No</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Email</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Password</th>
-        </tr>
-`)
-
-	for i, user := range createdUsers {
-		emailBody.WriteString(fmt.Sprintf(`
-        <tr>
-            <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">%d</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">%s</td>
-        </tr>
-    `, i+1, user["Email"], user["Password"]))
+	emailRows := make([]map[string]string, 0, len(createdUsers))
+	for _, user := range createdUsers {
+		emailRows = append(emailRows, map[string]string{
+			"email":    user["Email"],
+			"password": user["Password"],
+		})
 	}
-
-	emailBody.WriteString("</table>")
+	emailBody := buildBulkCreateEmailBody(emailRows)
 
 	emailUser := viper.GetString("EMAIL_SUPPORT")
-	err = pkg.SendEmailViaResend(emailUser, req.SendTo, "Mailria Create Bulk User", emailBody.String(), nil)
+	err = pkg.SendEmailViaResend(emailUser, req.SendTo, "[Mailria] - Bulk email list", emailBody, nil)
 	if err != nil {
 		log.Error("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -775,7 +767,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 		"created_users": createdUsers,
 		"skipped_users": skippedUsers,
 		"send_to":       req.SendTo,
-		"email_body":    emailBody.String(),
+		"email_body":    emailBody,
 	})
 }
 
@@ -1278,10 +1270,10 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 	}
 
 	// Validate password length
-	if req.PasswordLength < 8 || req.PasswordLength > 32 {
+	if req.PasswordLength < 6 || req.PasswordLength > 32 {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "validation_error",
-			"message": "password_length must be between 8 and 32.",
+			"message": "password_length must be between 6 and 32.",
 		})
 	}
 
@@ -1404,36 +1396,10 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 
 	// If send_to is provided, send email with credentials
 	if req.SendTo != "" {
-		var emailBody strings.Builder
-		emailBody.WriteString(`
-			<div style="font-family: Arial, sans-serif; padding: 20px;">
-				<h2>Bulk User Creation Results</h2>
-				<p>The following users have been created:</p>
-				<table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-					<tr style="background-color: #f2f2f2;">
-						<th style="border: 1px solid #ddd; padding: 8px; width: 50px; text-align: center;">No</th>
-						<th style="border: 1px solid #ddd; padding: 8px;">Email</th>
-						<th style="border: 1px solid #ddd; padding: 8px;">Password</th>
-					</tr>
-		`)
-
-		for i, user := range createdUsers {
-			emailBody.WriteString(fmt.Sprintf(`
-				<tr>
-					<td style="border: 1px solid #ddd; padding: 8px; text-align: center;">%d</td>
-					<td style="border: 1px solid #ddd; padding: 8px;">%s</td>
-					<td style="border: 1px solid #ddd; padding: 8px; font-family: monospace;">%s</td>
-				</tr>
-			`, i+1, user["email"], user["password"]))
-		}
-
-		emailBody.WriteString(`
-				</table>
-			</div>
-		`)
+		emailBody := buildBulkCreateEmailBody(createdUsers)
 
 		emailFrom := viper.GetString("EMAIL_SUPPORT")
-		err = pkg.SendEmailViaResend(emailFrom, req.SendTo, "Mailria Bulk User Creation", emailBody.String(), nil)
+		err = pkg.SendEmailViaResend(emailFrom, req.SendTo, "Mailria Bulk User Creation", emailBody, nil)
 		if err != nil {
 			log.Warn("Failed to send credentials email", logger.Err(err))
 			response["email_error"] = "Failed to send credentials email"
@@ -1449,6 +1415,69 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusCreated, response)
+}
+
+const bulkCreateEmailLogoURL = "https://image2url.com/r2/default/images/1771230290196-42620d10-b63b-46d7-8b1d-5879eb9c7830.png"
+
+func buildBulkCreateEmailBody(createdUsers []map[string]string) string {
+	var rows strings.Builder
+
+	for i, user := range createdUsers {
+		rows.WriteString(fmt.Sprintf(`
+			<tr>
+				<td style="padding: 16px; border-top: 1px solid #eaecf0; color: #101828; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: center;">%d</td>
+				<td style="padding: 16px; border-top: 1px solid #eaecf0; color: #101828; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; word-break: break-word;">%s</td>
+				<td style="padding: 16px; border-top: 1px solid #eaecf0; color: #101828; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; word-break: break-word;">%s</td>
+			</tr>
+		`, i+1, html.EscapeString(user["email"]), html.EscapeString(user["password"])))
+	}
+
+	return fmt.Sprintf(`
+		<div style="width: 100%%; padding: 16px; background: #f9fafb; box-sizing: border-box;">
+			<div style="max-width: 776px; margin: 0 auto; padding: 16px; background: #ffffff; border-radius: 8px; box-shadow: 0 6px 15px -2px rgba(16, 24, 40, 0.08), 0 6px 15px -2px rgba(16, 24, 40, 0.08);">
+				<div style="display: inline-flex; align-items: center; gap: 16px;">
+					<img src="%s" alt="Mailria Logo" style="width: 112px; height: 40px; object-fit: contain;" />
+				</div>
+				<div style="margin-top: 16px; color: #1d2939; font-size: 20px; font-weight: 600; line-height: 28px; font-family: Roboto, Arial, sans-serif;">Bulk email list details</div>
+				<div style="margin-top: 16px; color: #475467; font-size: 14px; font-weight: 400; line-height: 20px; font-family: Roboto, Arial, sans-serif;">Below is the list of %d emails that you have created.</div>
+				<div style="margin-top: 16px; border: 1px solid #eaecf0; border-radius: 12px; overflow: hidden; width: 100%%;">
+					<table style="width: 100%%; border-collapse: collapse; table-layout: fixed;">
+						<thead>
+							<tr>
+								<th style="width: 72px; padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: center;">No</th>
+								<th style="padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: left;">Email</th>
+								<th style="padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: left;">Password</th>
+							</tr>
+						</thead>
+						<tbody>
+							%s
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	`, bulkCreateEmailLogoURL, len(createdUsers), rows.String())
+}
+
+func resolveBulkPasswordSpec(input string) (string, error) {
+	password := strings.TrimSpace(input)
+	if password == "" {
+		return "", fmt.Errorf("password is required")
+	}
+
+	parts := strings.SplitN(password, ":", 2)
+	if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "random") {
+		length, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return "", fmt.Errorf("invalid password format, use random:<length>")
+		}
+		if length < 6 || length > 32 {
+			return "", fmt.Errorf("random password length must be between 6 and 32")
+		}
+		return generateSecurePassword(length), nil
+	}
+
+	return password, nil
 }
 
 // generateSecurePassword generates a secure password with the specified length
@@ -1468,8 +1497,8 @@ func generateSecurePassword(length int) string {
 	password[2] = digits[rand.Intn(len(digits))]
 	password[3] = special[rand.Intn(len(special))]
 
-	// Fill rest with all characters
-	all := lowercase + uppercase + digits + special
+	// Fill rest without special chars to keep exactly one special character
+	all := lowercase + uppercase + digits
 	for i := 4; i < length; i++ {
 		password[i] = all[rand.Intn(len(all))]
 	}
