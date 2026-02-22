@@ -25,6 +25,11 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+const (
+	maxChangePasswordAttempts = 5
+	changePasswordBlockWindow = 5 * time.Minute
+)
+
 // NOTE: LoginHandler and LogoutHandler have been moved to domain/auth package
 // Use auth.LoginHandler for /login and /user/login routes
 
@@ -174,18 +179,22 @@ func ChangePasswordHandler(c echo.Context) error {
 		))
 	}
 
-	if req.UserID == 0 {
-		req.UserID = int(userID)
+	// Always use authenticated user id; ignore payload user_id for this endpoint.
+	req.UserID = int(userID)
+
+	if strings.TrimSpace(req.OldPassword) == "" {
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"Old password is required.",
+		))
 	}
 
 	var user struct {
-		HashedPassword string     `db:"password"`
-		FailedAttempts int        `db:"failed_attempts"`
-		LastFailedAt   *time.Time `db:"last_failed_at"`
+		HashedPassword string `db:"password"`
 	}
 
 	err := config.DB.Get(&user, `
-        SELECT password, failed_attempts, last_failed_at
+        SELECT password
         FROM users WHERE id = ?`, req.UserID)
 	if err != nil {
 		log.Error("Failed to fetch user data for password change", err)
@@ -196,59 +205,95 @@ func ChangePasswordHandler(c echo.Context) error {
 		))
 	}
 
-	maxAttempts := 5
-	blockDuration := time.Hour
-	if user.FailedAttempts >= maxAttempts && user.LastFailedAt != nil {
-		if time.Since(*user.LastFailedAt) < blockDuration {
+	var attempts struct {
+		FailedAttempts int        `db:"failed_attempts"`
+		BlockedUntil   *time.Time `db:"blocked_until"`
+	}
+	err = config.DB.Get(&attempts, `
+		SELECT failed_attempts, blocked_until
+		FROM change_password_attempts
+		WHERE user_id = ?
+	`, req.UserID)
+	if err != nil && err != sql.ErrNoRows {
+		log.Error("Failed to fetch change password attempts", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeDatabaseError,
+			"Internal server error.",
+			err,
+		))
+	}
+	if err == nil && attempts.BlockedUntil != nil {
+		if attempts.BlockedUntil.After(time.Now()) {
 			log.Warn("Password change blocked - too many failed attempts")
 			return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
 				apperrors.ErrCodeRateLimitExceeded,
 				"Account is temporarily locked. Please try again later.",
 			))
-		} else {
-			_, err = config.DB.Exec(`
-                UPDATE users
-                SET failed_attempts = 0,
-                    last_failed_at = NULL
-                WHERE id = ?`, req.UserID)
-			if err != nil {
-				log.Error("Failed to reset failed attempts", err)
-				return apperrors.RespondWithError(c, apperrors.NewInternal(
-					apperrors.ErrCodeDatabaseError,
-					"Internal server error.",
-					err,
-				))
-			}
-			user.FailedAttempts = 0
-			user.LastFailedAt = nil
 		}
+		_, err = config.DB.Exec(`
+			UPDATE change_password_attempts
+			SET failed_attempts = 0, blocked_until = NULL, last_attempt_at = NOW()
+			WHERE user_id = ?
+		`, req.UserID)
+		if err != nil {
+			log.Error("Failed to reset expired change password lock", err)
+			return apperrors.RespondWithError(c, apperrors.NewInternal(
+				apperrors.ErrCodeDatabaseError,
+				"Internal server error.",
+				err,
+			))
+		}
+		attempts.FailedAttempts = 0
+		attempts.BlockedUntil = nil
 	}
 
-	if req.OldPassword != "" {
-		if !utils.CheckPasswordHash(req.OldPassword, user.HashedPassword) {
-			log.Debug("Incorrect old password provided")
+	if !utils.CheckPasswordHash(req.OldPassword, user.HashedPassword) {
+		log.Debug("Incorrect old password provided")
 
-			_, err = config.DB.Exec(`
-                UPDATE users
-                SET failed_attempts = failed_attempts + 1,
-                    last_failed_at = NOW()
-                WHERE id = ?`, req.UserID)
-			if err != nil {
-				log.Error("Failed to increment failed attempts", err)
-			}
-
-			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
-				apperrors.ErrCodeInvalidPassword,
-				"The password you entered is incorrect.",
+		newAttempts := attempts.FailedAttempts + 1
+		var blockedUntil interface{} = nil
+		if newAttempts >= maxChangePasswordAttempts {
+			blockedUntil = time.Now().Add(changePasswordBlockWindow)
+		}
+		_, err = config.DB.Exec(`
+			INSERT INTO change_password_attempts
+				(user_id, failed_attempts, blocked_until, last_attempt_at, created_at)
+			VALUES
+				(?, ?, ?, NOW(), NOW())
+			ON DUPLICATE KEY UPDATE
+				failed_attempts = VALUES(failed_attempts),
+				blocked_until = VALUES(blocked_until),
+				last_attempt_at = NOW()
+		`, req.UserID, newAttempts, blockedUntil)
+		if err != nil {
+			log.Error("Failed to increment change password attempts", err)
+			return apperrors.RespondWithError(c, apperrors.NewInternal(
+				apperrors.ErrCodeDatabaseError,
+				"Internal server error.",
+				err,
 			))
 		}
 
-		if utils.CheckPasswordHash(req.NewPassword, user.HashedPassword) {
-			return apperrors.RespondWithError(c, apperrors.NewBadRequest(
-				apperrors.ErrCodeValidationFailed,
-				"The new password cannot be the same as the old password.",
+		if newAttempts >= maxChangePasswordAttempts {
+			return apperrors.RespondWithError(c, apperrors.NewTooManyRequests(
+				apperrors.ErrCodeRateLimitExceeded,
+				"Account is temporarily locked. Please try again later.",
 			))
 		}
+
+		// User is already authenticated; wrong old password is a validation error,
+		// not an auth failure. Returning 400 avoids auth-refresh retry loops.
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeInvalidPassword,
+			"The password you entered is incorrect.",
+		))
+	}
+
+	if utils.CheckPasswordHash(req.NewPassword, user.HashedPassword) {
+		return apperrors.RespondWithError(c, apperrors.NewBadRequest(
+			apperrors.ErrCodeValidationFailed,
+			"The new password cannot be the same as the old password.",
+		))
 	}
 
 	newHashedPassword, err := utils.HashPassword(req.NewPassword)
@@ -261,13 +306,11 @@ func ChangePasswordHandler(c echo.Context) error {
 		))
 	}
 
-	// Update the user's password and reset failed attempts
+	// Update the user's password.
 	_, err = config.DB.Exec(`
         UPDATE users
         SET password = ?,
             token_version = token_version + 1,
-            failed_attempts = 0,
-            last_failed_at = NULL,
             updated_at = NOW()
         WHERE id = ?`, newHashedPassword, req.UserID)
 	if err != nil {
@@ -277,6 +320,14 @@ func ChangePasswordHandler(c echo.Context) error {
 			"Internal server error.",
 			err,
 		))
+	}
+
+	if _, err := config.DB.Exec(`
+		UPDATE change_password_attempts
+		SET failed_attempts = 0, blocked_until = NULL, last_attempt_at = NOW()
+		WHERE user_id = ?
+	`, req.UserID); err != nil {
+		log.Warn("Failed to reset change password attempts", logger.Err(err))
 	}
 
 	// Revoke all refresh tokens (force logout on all other devices)
