@@ -431,7 +431,7 @@ func CreateUserAdminHandler(c echo.Context) error {
 	}
 
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
 		req.Username, hashedPassword, 2, userID, userID, userName, userName,
 	)
 	if err != nil {
@@ -480,7 +480,7 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 	}
 
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
 		req.Username, hashedPassword, 0, 0, 0, "", "",
 	)
 	if err != nil {
@@ -529,7 +529,7 @@ func CreateUserHandler(c echo.Context) error {
 	}
 
 	_, err = config.DB.Exec(
-		"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
+		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
 		req.Email, hashedPassword, 1, userID, userID, userName, userName,
 	)
 	if err != nil {
@@ -748,7 +748,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 	for i, username := range finalUsernames {
 		// Insert user
 		_, err = tx.Exec(
-			"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
+			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), ?, ?, ?, ?)",
 			username, hashedPassword, userID, userID, userName, userName,
 		)
 		if err != nil {
@@ -1396,7 +1396,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 		}
 
 		_, err = tx.Exec(
-			"INSERT INTO users (email, password, role_id, created_at, updated_at, last_login, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), NOW(), ?, ?, ?, ?)",
+			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), ?, ?, ?, ?)",
 			username, hashedPassword, userID, userID, userName, userName,
 		)
 		if err != nil {
