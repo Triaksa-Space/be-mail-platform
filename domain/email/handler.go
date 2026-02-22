@@ -889,102 +889,92 @@ func SendEmailSMTPHandler(c echo.Context) error {
 func GetFileEmailToDownloadHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 	roleID := c.Get("role_id").(int64)
-	// Get email ID and file URL from the request parameters
-	// emailID := c.Param("id")
-	// fileURL := c.Param("file_url")
-	// Define a struct to parse the JSON payload
+
 	type RequestPayload struct {
 		EmailID string `json:"email_id"`
 		FileURL string `json:"file_url"`
 	}
 
-	// Parse the JSON payload
 	var payload RequestPayload
 	if err := c.Bind(&payload); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
 	}
 
-	emailID := payload.EmailID
-	fileURL := payload.FileURL
-
-	// Fetch the email record from the database
-	var email Email
-	var query string
-	var err error
-
-	if roleID == 1 {
-		query = `SELECT id, 
-            user_id, 
-            sender_email, sender_name, 
-            subject, 
-            body,
-			preview,
-			message_id,
-			COALESCE(attachments, '') AS attachments,
-            timestamp, 
-            created_at, 
-            updated_at  FROM emails WHERE id = ? and user_id = ?`
-
-		err = config.DB.Get(&email, query, emailID, userID)
-	} else {
-		query = `SELECT id, 
-			user_id, 
-			sender_email, sender_name, 
-			subject, 
-			body,
-			preview,
-			message_id,
-			COALESCE(attachments, '') AS attachments,
-			timestamp, 
-			created_at, 
-			updated_at  FROM emails WHERE id = ?`
-
-		err = config.DB.Get(&email, query, emailID)
+	if strings.TrimSpace(payload.FileURL) == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "file_url is required"})
 	}
 
-	if err != nil {
-		fmt.Println("Failed to fetch email", err)
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
-	}
+	downloadURL := ""
 
-	// Extract the file URL from the email record
-	var attachmentURLs []string
-	if err := json.Unmarshal([]byte(email.Attachments), &attachmentURLs); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to parse attachments"})
-	}
+	if strings.TrimSpace(payload.EmailID) != "" {
+		emailID, err := decodeEmailID(payload.EmailID)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid email ID"})
+		}
 
-	// Find the matching file URL
-	var downloadURL string
-	for _, url := range attachmentURLs {
-		if strings.Contains(url, fileURL) {
-			downloadURL = url
-			break
+		foundInSource := false
+
+		urlFromInbox, found, err := findDownloadURLByID("emails", userID, roleID, emailID, payload.FileURL)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch email attachments"})
+		}
+		if found {
+			foundInSource = true
+			downloadURL = urlFromInbox
+		}
+
+		if downloadURL == "" {
+			urlFromSent, found, err := findDownloadURLByID("sent_emails", userID, roleID, emailID, payload.FileURL)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch sent email attachments"})
+			}
+			if found {
+				foundInSource = true
+				downloadURL = urlFromSent
+			}
+		}
+
+		// If caller explicitly sent email_id and record was found but file isn't in that record.
+		if foundInSource && downloadURL == "" {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "File not found"})
 		}
 	}
 
+	// Fallback path: resolve by file_url only across inbox + sent tables.
+	if downloadURL == "" {
+		urlByFileOnly, err := findDownloadURLByFileURL(userID, roleID, payload.FileURL)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch attachment"})
+		}
+		downloadURL = urlByFileOnly
+	}
 	if downloadURL == "" {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "File not found"})
 	}
 
-	// Parse the S3 URL to get the bucket name and key
 	parsedURL, err := url.Parse(downloadURL)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to parse file URL"})
 	}
 
-	bucket := strings.Split(parsedURL.Host, ".")[0]
-	key := strings.TrimPrefix(parsedURL.Path, "/")
+	hostParts := strings.Split(parsedURL.Host, ".")
+	if len(hostParts) == 0 || hostParts[0] == "" {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Invalid S3 host"})
+	}
 
-	// Initialize AWS session
+	bucket := hostParts[0]
+	key := strings.TrimPrefix(parsedURL.Path, "/")
+	if key == "" {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "File key not found"})
+	}
+
 	sess, err := pkg.InitAWS()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to initialize AWS session"})
 	}
 
-	// Create S3 client
 	s3Client := s3.New(sess)
 
-	// Get the object from S3
 	output, err := s3Client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -994,16 +984,229 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
 	}
 	defer output.Body.Close()
 
-	// Set the response headers
-	c.Response().Header().Set(echo.HeaderContentType, *output.ContentType)
-	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%s", path.Base(key)))
+	contentType := "application/octet-stream"
+	if output.ContentType != nil && *output.ContentType != "" {
+		contentType = *output.ContentType
+	}
 
-	// Stream the file to the client
+	filename := path.Base(key)
+	filename = strings.ReplaceAll(filename, `"`, "")
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "attachment"
+	}
+
+	c.Response().Header().Set(echo.HeaderContentType, contentType)
+	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", filename, url.QueryEscape(filename)))
+
 	if _, err := io.Copy(c.Response().Writer, output.Body); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to stream file"})
 	}
 
 	return nil
+}
+
+func findDownloadURLByID(table string, userID, roleID, emailID int64, requestFileURL string) (string, bool, error) {
+	type row struct {
+		Attachments string `db:"attachments"`
+	}
+
+	var record row
+	var err error
+	if roleID == 1 {
+		query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE id = ? AND user_id = ? LIMIT 1`, table)
+		err = config.DB.Get(&record, query, emailID, userID)
+	} else {
+		query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE id = ? LIMIT 1`, table)
+		err = config.DB.Get(&record, query, emailID)
+	}
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	attachmentURLs, err := parseAttachmentURLs(record.Attachments)
+	if err != nil {
+		return "", true, err
+	}
+
+	return findMatchingAttachmentURL(attachmentURLs, requestFileURL), true, nil
+}
+
+func findDownloadURLByFileURL(userID, roleID int64, requestFileURL string) (string, error) {
+	key := extractS3ObjectKey(requestFileURL)
+	if key == "" {
+		key = extractAttachmentFilename(requestFileURL)
+	}
+	if key == "" {
+		return "", nil
+	}
+
+	// Key search in attachments JSON reduces rows before exact matching in Go.
+	pattern := "%" + key + "%"
+	for _, table := range []string{"emails", "sent_emails"} {
+		type row struct {
+			Attachments string `db:"attachments"`
+		}
+
+		var rows []row
+		var err error
+		if roleID == 1 {
+			query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE user_id = ? AND attachments LIKE ? ORDER BY id DESC LIMIT 100`, table)
+			err = config.DB.Select(&rows, query, userID, pattern)
+		} else {
+			query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE attachments LIKE ? ORDER BY id DESC LIMIT 100`, table)
+			err = config.DB.Select(&rows, query, pattern)
+		}
+		if err != nil {
+			return "", err
+		}
+
+		for _, r := range rows {
+			attachmentURLs, err := parseAttachmentURLs(r.Attachments)
+			if err != nil {
+				continue
+			}
+			if matched := findMatchingAttachmentURL(attachmentURLs, requestFileURL); matched != "" {
+				return matched, nil
+			}
+		}
+	}
+
+	return "", nil
+}
+
+func parseAttachmentURLs(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}, nil
+	}
+
+	var attachmentURLs []string
+	if err := json.Unmarshal([]byte(raw), &attachmentURLs); err != nil {
+		return nil, err
+	}
+
+	return attachmentURLs, nil
+}
+
+func decodeEmailID(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, errors.New("empty email_id")
+	}
+
+	if decodedID, err := utils.DecodeID(raw); err == nil {
+		return int64(decodedID), nil
+	}
+
+	parsedID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsedID <= 0 {
+		return 0, errors.New("invalid email_id")
+	}
+
+	return parsedID, nil
+}
+
+func findMatchingAttachmentURL(attachmentURLs []string, requestFileURL string) string {
+	requestFileURL = strings.TrimSpace(requestFileURL)
+	if requestFileURL == "" {
+		return ""
+	}
+
+	requestedKey := extractS3ObjectKey(requestFileURL)
+	requestedFilename := extractAttachmentFilename(requestFileURL)
+
+	for _, attachmentURL := range attachmentURLs {
+		if normalizeURLForCompare(attachmentURL) == normalizeURLForCompare(requestFileURL) {
+			return attachmentURL
+		}
+	}
+
+	if requestedKey != "" {
+		for _, attachmentURL := range attachmentURLs {
+			if extractS3ObjectKey(attachmentURL) == requestedKey {
+				return attachmentURL
+			}
+		}
+	}
+
+	if requestedFilename != "" {
+		for _, attachmentURL := range attachmentURLs {
+			if extractAttachmentFilename(attachmentURL) == requestedFilename {
+				return attachmentURL
+			}
+		}
+	}
+
+	return ""
+}
+
+func extractAttachmentFilename(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return path.Base(rawURL)
+	}
+
+	filename := path.Base(parsedURL.Path)
+	if filename == "." || filename == "/" {
+		return ""
+	}
+	if decoded, err := url.PathUnescape(filename); err == nil {
+		return decoded
+	}
+	return filename
+}
+
+func extractS3ObjectKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.TrimLeft(rawURL, "/")
+	}
+
+	key := strings.TrimLeft(parsedURL.Path, "/")
+	if key == "" {
+		return ""
+	}
+
+	if decoded, err := url.PathUnescape(key); err == nil {
+		return decoded
+	}
+
+	return key
+}
+
+func normalizeURLForCompare(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	if decodedPath, err := url.PathUnescape(parsed.Path); err == nil {
+		parsed.Path = decodedPath
+	}
+
+	return parsed.String()
 }
 
 func GetEmailHandler(c echo.Context) error {
