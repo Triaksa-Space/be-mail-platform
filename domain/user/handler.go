@@ -1495,7 +1495,7 @@ func buildBulkCreateEmailBody(createdUsers []map[string]string) string {
 					<table style="width: 100%%; border-collapse: collapse; table-layout: fixed;">
 						<thead>
 							<tr>
-								<th style="width: 72px; padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: center;">No</th>
+								<th style="width: 47px; padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: center;">No</th>
 								<th style="padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: left;">Email</th>
 								<th style="padding: 16px; color: #344054; font-size: 14px; font-weight: 500; line-height: 20px; font-family: Roboto, Arial, sans-serif; text-align: left;">Password</th>
 							</tr>
