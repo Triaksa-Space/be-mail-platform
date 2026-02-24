@@ -77,11 +77,11 @@ type UpdateAdminRequest struct {
 // ListAdminsHandler returns a list of admin users
 // GET /api/admins
 func ListAdminsHandler(c echo.Context) error {
-	// Check if user is superadmin
 	roleID := c.Get("role_id").(int64)
-	if roleID != 0 {
+	userID := c.Get("user_id").(int64)
+	if roleID != 0 && !HasPermission(userID, "roles_permissions") {
 		return c.JSON(http.StatusForbidden, map[string]string{
-			"error": "Access denied. Superadmin only.",
+			"error": "Access denied.",
 		})
 	}
 
@@ -196,11 +196,11 @@ func ListAdminsHandler(c echo.Context) error {
 // GetAdminHandler returns a single admin user
 // GET /api/admins/:id
 func GetAdminHandler(c echo.Context) error {
-	// Check if user is superadmin
 	roleID := c.Get("role_id").(int64)
-	if roleID != 0 {
+	userID := c.Get("user_id").(int64)
+	if roleID != 0 && !HasPermission(userID, "roles_permissions") {
 		return c.JSON(http.StatusForbidden, map[string]string{
-			"error": "Access denied. Superadmin only.",
+			"error": "Access denied.",
 		})
 	}
 
@@ -262,15 +262,13 @@ func GetAdminHandler(c echo.Context) error {
 // CreateAdminHandler creates a new admin user
 // POST /api/admins
 func CreateAdminHandler(c echo.Context) error {
-	// Check if user is superadmin
 	roleID := c.Get("role_id").(int64)
-	if roleID != 0 {
+	userID := c.Get("user_id").(int64)
+	if roleID != 0 && !HasPermission(userID, "roles_permissions") {
 		return c.JSON(http.StatusForbidden, map[string]string{
-			"error": "Access denied. Superadmin only.",
+			"error": "Access denied.",
 		})
 	}
-
-	userID := c.Get("user_id").(int64)
 
 	// Get superadmin email for audit
 	var creatorEmail string
@@ -379,11 +377,11 @@ func CreateAdminHandler(c echo.Context) error {
 // UpdateAdminHandler updates an existing admin user
 // PUT /api/admins/:id
 func UpdateAdminHandler(c echo.Context) error {
-	// Check if user is superadmin
 	roleID := c.Get("role_id").(int64)
-	if roleID != 0 {
+	userID := c.Get("user_id").(int64)
+	if roleID != 0 && !HasPermission(userID, "roles_permissions") {
 		return c.JSON(http.StatusForbidden, map[string]string{
-			"error": "Access denied. Superadmin only.",
+			"error": "Access denied.",
 		})
 	}
 
@@ -515,11 +513,11 @@ func UpdateAdminHandler(c echo.Context) error {
 // DeleteAdminHandler deletes an admin user
 // DELETE /api/admins/:id
 func DeleteAdminHandler(c echo.Context) error {
-	// Check if user is superadmin
 	roleID := c.Get("role_id").(int64)
-	if roleID != 0 {
+	userID := c.Get("user_id").(int64)
+	if roleID != 0 && !HasPermission(userID, "roles_permissions") {
 		return c.JSON(http.StatusForbidden, map[string]string{
-			"error": "Access denied. Superadmin only.",
+			"error": "Access denied.",
 		})
 	}
 
