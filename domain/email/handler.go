@@ -205,8 +205,12 @@ func GetEmailQuota(userID int64) (*EmailQuota, error) {
 		return nil, err
 	}
 
-	// Reset the 24h window if expired or first send
-	if u.LastEmailTime == nil || time.Since(*u.LastEmailTime) >= 24*time.Hour {
+	now := time.Now()
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrowMidnight := todayMidnight.Add(24 * time.Hour)
+
+	// Reset at midnight: if no last_email_time or it's from a previous day
+	if u.LastEmailTime == nil || u.LastEmailTime.Before(todayMidnight) {
 		_, err := config.DB.Exec(`
             UPDATE users
             SET sent_emails = 0,
@@ -215,13 +219,10 @@ func GetEmailQuota(userID int64) (*EmailQuota, error) {
 		if err != nil {
 			return nil, err
 		}
-		now := time.Now()
-		resetsAt := now.Add(24 * time.Hour)
-		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
 	}
 
-	resetsAt := u.LastEmailTime.Add(24 * time.Hour)
-	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
 }
 
 func CheckEmailLimit(userID int64) error {
@@ -2903,8 +2904,12 @@ func GetEmailQuotaWithTimeout(userID int64) (*EmailQuota, error) {
 		return nil, err
 	}
 
-	// Reset the 24h window if expired or first send
-	if u.LastEmailTime == nil || time.Since(*u.LastEmailTime) >= 24*time.Hour {
+	now := time.Now()
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrowMidnight := todayMidnight.Add(24 * time.Hour)
+
+	// Reset at midnight: if no last_email_time or it's from a previous day
+	if u.LastEmailTime == nil || u.LastEmailTime.Before(todayMidnight) {
 		_, err := config.ExecuteWithTimeout(`
             UPDATE users
             SET sent_emails = 0,
@@ -2913,13 +2918,10 @@ func GetEmailQuotaWithTimeout(userID int64) (*EmailQuota, error) {
 		if err != nil {
 			return nil, err
 		}
-		now := time.Now()
-		resetsAt := now.Add(24 * time.Hour)
-		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
 	}
 
-	resetsAt := u.LastEmailTime.Add(24 * time.Hour)
-	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &resetsAt}, nil
+	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
 }
 
 func CheckEmailLimitWithTimeout(userID int64) error {
