@@ -1116,13 +1116,14 @@ func ListUsersHandler(c echo.Context) error {
 	}
 
 	allowedSortFields := map[string]bool{
-		"last_login desc": true,
-		"last_login asc":  true,
-		"email desc":      true,
-		"email asc":       true,
-		"created_at desc": true,
-		"created_at asc":  true,
-		// Add other allowed sort fields
+		"last_login desc":      true,
+		"last_login asc":       true,
+		"email desc":           true,
+		"email asc":            true,
+		"created_at desc":      true,
+		"created_at asc":       true,
+		"created_by_name desc": true,
+		"created_by_name asc":  true,
 	}
 	if !allowedSortFields[sortFields] {
 		sortFields = "last_login desc" // Default safe value
