@@ -1571,7 +1571,7 @@ func generateSecurePassword(length int) string {
 		lowercase = "abcdefghijklmnopqrstuvwxyz"
 		uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 		digits    = "0123456789"
-		special   = "!@#$%^&*"
+		special   = "#!"
 	)
 
 	password := make([]byte, length)
