@@ -865,6 +865,11 @@ func DeleteUserAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found."})
 	}
 
+	// Count emails before deletion to update counters
+	var inboxCount, sentCount int64
+	config.DB.Get(&inboxCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'inbox'", userID)
+	config.DB.Get(&sentCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'sent'", userID)
+
 	// Start transaction
 	tx, err := config.DB.Begin()
 	if err != nil {
@@ -894,6 +899,14 @@ func DeleteUserAdminHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction."})
 	}
 
+	// Decrement email counters
+	if inboxCount > 0 {
+		admin.IncrementCounter("total_inbox", -inboxCount)
+	}
+	if sentCount > 0 {
+		admin.IncrementCounter("total_sent", -sentCount)
+	}
+
 	return c.JSON(http.StatusOK, map[string]string{"message": "User and associated data deleted successfully."})
 }
 
@@ -907,6 +920,11 @@ func DeleteUserHandler(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found."})
 	}
+
+	// Count emails before deletion to update counters
+	var inboxCount, sentCount int64
+	config.DB.Get(&inboxCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'inbox'", userID)
+	config.DB.Get(&sentCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'sent'", userID)
 
 	// Start transaction
 	tx, err := config.DB.Begin()
@@ -940,6 +958,14 @@ func DeleteUserHandler(c echo.Context) error {
 	// Decrement domain user counter
 	if parts := strings.Split(userEmail, "@"); len(parts) == 2 {
 		admin.IncrementCounter("users_domain_"+parts[1], -1)
+	}
+
+	// Decrement email counters
+	if inboxCount > 0 {
+		admin.IncrementCounter("total_inbox", -inboxCount)
+	}
+	if sentCount > 0 {
+		admin.IncrementCounter("total_sent", -sentCount)
 	}
 
 	// TODO: SEARCH HIS ATTACHMENT AND DELETE IT

@@ -1645,6 +1645,13 @@ func getAttachmentURLs(attachmentsJSON string) []Attachment {
 func DeleteEmailHandler(c echo.Context) error {
 	emailID := c.Param("id")
 
+	// Get email type before deletion to update counter
+	var emailType string
+	err := config.DB.Get(&emailType, "SELECT email_type FROM emails WHERE id = ?", emailID)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+	}
+
 	// Delete email by ID
 	result, err := config.DB.Exec("DELETE FROM emails WHERE id = ?", emailID)
 	if err != nil {
@@ -1654,6 +1661,13 @@ func DeleteEmailHandler(c echo.Context) error {
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected == 0 {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+	}
+
+	// Decrement appropriate counter
+	if emailType == "inbox" {
+		admin.IncrementCounter("total_inbox", -1)
+	} else if emailType == "sent" {
+		admin.IncrementCounter("total_sent", -1)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Email deleted successfully"})

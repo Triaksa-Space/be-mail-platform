@@ -830,6 +830,67 @@ func GetCounter(key string) (int64, error) {
 	return value, err
 }
 
+// ReconcileCountersHandler re-queries actual data from DB and corrects all dashboard counters
+func ReconcileCountersHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("admin_reconcile")
+
+	// Count total_inbox
+	var totalInbox int64
+	if err := config.DB.Get(&totalInbox, "SELECT COUNT(*) FROM emails WHERE email_type = 'inbox'"); err != nil {
+		log.Error("Failed to count inbox emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to reconcile counters"})
+	}
+
+	// Count total_sent
+	var totalSent int64
+	if err := config.DB.Get(&totalSent, "SELECT COUNT(*) FROM emails WHERE email_type = 'sent'"); err != nil {
+		log.Error("Failed to count sent emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to reconcile counters"})
+	}
+
+	// Count users by domain
+	type DomainCount struct {
+		Domain string `db:"domain"`
+		Count  int64  `db:"count"`
+	}
+	var domainCounts []DomainCount
+	err := config.DB.Select(&domainCounts, `
+		SELECT SUBSTRING_INDEX(email, '@', -1) as domain, COUNT(*) as count
+		FROM users
+		WHERE role_id = 1
+		GROUP BY domain
+	`)
+	if err != nil {
+		log.Error("Failed to count users by domain", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to reconcile counters"})
+	}
+
+	// Build updates map and apply
+	updates := map[string]int64{
+		"total_inbox": totalInbox,
+		"total_sent":  totalSent,
+	}
+	for _, dc := range domainCounts {
+		updates["users_domain_"+strings.ToLower(dc.Domain)] = dc.Count
+	}
+
+	for key, value := range updates {
+		if _, err := config.DB.Exec(`
+			UPDATE dashboard_counters
+			SET counter_value = ?, updated_at = NOW()
+			WHERE counter_key = ?
+		`, value, key); err != nil {
+			log.Error("Failed to update counter "+key, err)
+		}
+	}
+
+	log.Info("Counter reconciliation completed")
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":  "Counters reconciled successfully",
+		"counters": updates,
+	})
+}
+
 // InitializeDomainCounters initializes domain counters based on existing users
 func InitializeDomainCounters() error {
 	type DomainCount struct {

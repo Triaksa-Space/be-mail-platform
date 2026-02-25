@@ -325,6 +325,7 @@ func enforceEmailLimit(userID int64, maxEmails int) {
 			logger.UserID(userID),
 			logger.Int64("deleted_count", rowsDeleted),
 		)
+		admin.IncrementCounter("total_inbox", -rowsDeleted)
 	}
 }
 
