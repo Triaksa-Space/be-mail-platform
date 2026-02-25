@@ -50,6 +50,7 @@ func RegisterRoutes(e *echo.Echo) {
 	domainGroup := e.Group("/domain", middleware.JWTMiddleware)
 	domainGroup.GET("/dropdown", domain.GetDropdownDomainHandler, middleware.RoleMiddleware(adminRoles))
 	domainGroup.POST("/", domain.CreateDomainHandler, middleware.RoleMiddleware(superAdminOnly))
+	domainGroup.POST("/update/staging", domain.UpdateStagingDomainsHandler, middleware.RoleMiddleware(superAdminOnly))
 	domainGroup.DELETE("/:id", domain.DeleteDomainHandler, middleware.RoleMiddleware(superAdminOnly))
 
 	// User routes

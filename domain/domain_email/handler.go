@@ -67,3 +67,33 @@ func DeleteDomainHandler(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Domain deleted successfully"})
 }
+
+func UpdateStagingDomainsHandler(c echo.Context) error {
+	tx, err := config.DB.Beginx()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to start transaction"})
+	}
+	defer tx.Rollback()
+
+	result1, err := tx.Exec("UPDATE domains SET domain = ? WHERE id = ?", "staging.mailria.com", 1)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update domain id 1"})
+	}
+
+	result2, err := tx.Exec("UPDATE domains SET domain = ? WHERE id = ?", "staging.mailsaja.com", 2)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update domain id 2"})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+	}
+
+	rows1, _ := result1.RowsAffected()
+	rows2, _ := result2.RowsAffected()
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":         "Staging domains updated successfully",
+		"updated_rows_id": map[string]int64{"1": rows1, "2": rows2},
+	})
+}
