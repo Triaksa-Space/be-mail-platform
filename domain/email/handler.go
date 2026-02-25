@@ -1663,11 +1663,9 @@ func DeleteEmailHandler(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
 	}
 
-	// Decrement appropriate counter
+	// Decrement inbox counter (sent emails are in sent_emails table, tracked separately)
 	if emailType == "inbox" {
 		admin.IncrementCounter("total_inbox", -1)
-	} else if emailType == "sent" {
-		admin.IncrementCounter("total_sent", -1)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Email deleted successfully"})

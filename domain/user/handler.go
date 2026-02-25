@@ -868,7 +868,7 @@ func DeleteUserAdminHandler(c echo.Context) error {
 	// Count emails before deletion to update counters
 	var inboxCount, sentCount int64
 	config.DB.Get(&inboxCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'inbox'", userID)
-	config.DB.Get(&sentCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'sent'", userID)
+	config.DB.Get(&sentCount, "SELECT COUNT(*) FROM sent_emails WHERE user_id = ?", userID)
 
 	// Start transaction
 	tx, err := config.DB.Begin()
@@ -924,7 +924,7 @@ func DeleteUserHandler(c echo.Context) error {
 	// Count emails before deletion to update counters
 	var inboxCount, sentCount int64
 	config.DB.Get(&inboxCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'inbox'", userID)
-	config.DB.Get(&sentCount, "SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = 'sent'", userID)
+	config.DB.Get(&sentCount, "SELECT COUNT(*) FROM sent_emails WHERE user_id = ?", userID)
 
 	// Start transaction
 	tx, err := config.DB.Begin()

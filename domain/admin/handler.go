@@ -843,7 +843,7 @@ func ReconcileCountersHandler(c echo.Context) error {
 
 	// Count total_sent
 	var totalSent int64
-	if err := config.DB.Get(&totalSent, "SELECT COUNT(*) FROM emails WHERE email_type = 'sent'"); err != nil {
+	if err := config.DB.Get(&totalSent, "SELECT COUNT(*) FROM sent_emails"); err != nil {
 		log.Error("Failed to count sent emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to reconcile counters"})
 	}
