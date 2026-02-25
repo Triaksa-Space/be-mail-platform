@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -12,7 +13,12 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/jhillyerd/enmime"
+	"github.com/labstack/echo/v4"
 )
+
+// processMu ensures only one ProcessAllPendingEmails runs at a time.
+// If cron and a manual trigger overlap, the second call returns immediately.
+var processMu sync.Mutex
 
 // ProcessConfig holds configuration for the email processor
 type ProcessConfig struct {
@@ -57,6 +63,13 @@ func ProcessAllPendingEmails() error {
 
 // ProcessAllPendingEmailsWithConfig processes emails with custom configuration
 func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
+	// Guard: if another process call is already running (cron or manual), skip.
+	if !processMu.TryLock() {
+		logger.Get().WithComponent("email_processor").Debug("Process already running, skipping concurrent call")
+		return nil
+	}
+	defer processMu.Unlock()
+
 	log := logger.Get().WithComponent("email_processor")
 	startTime := time.Now()
 
@@ -224,9 +237,10 @@ func processOneEmail(log logger.Logger, workerID int, rawEmail IncomingEmail) Pr
 	// Get subject
 	subject := env.GetHeader("Subject")
 
-	// Insert into emails table
+	// Insert into emails table — INSERT IGNORE prevents duplicates if two
+	// concurrent processes (cron + manual trigger) race on the same message_id.
 	_, err = config.DB.Exec(`
-		INSERT INTO emails (
+		INSERT IGNORE INTO emails (
 			user_id,
 			sender_email,
 			sender_name,
@@ -382,4 +396,23 @@ func GetProcessingStats() (map[string]int64, error) {
 	stats["total_emails"] = total
 
 	return stats, nil
+}
+
+// TriggerProcessEmailsHandler allows admins to manually trigger email processing
+// via POST /admin/process-emails. Safe to call while cron is running — the
+// processMu mutex ensures only one execution runs at a time.
+func TriggerProcessEmailsHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("manual_process")
+	log.Info("Manual email processing triggered")
+
+	if err := ProcessAllPendingEmails(); err != nil {
+		log.Error("Manual process failed", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to process emails",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Email processing completed",
+	})
 }
