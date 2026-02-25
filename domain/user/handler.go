@@ -722,16 +722,34 @@ func BulkCreateUserHandler(c echo.Context) error {
 		finalUsernames = append(finalUsernames, availableUsername)
 	}
 
-	plainPassword, err := resolveBulkPasswordSpec(req.Password)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-	}
+	// Step 4: Determine password strategy — fixed (hash once) vs random per-user
+	isRandomPerUser := false
+	var randomPasswordLength int
+	var fixedPlainPassword string
+	var fixedHashedPassword string
 
-	// Step 4: Hash password once (same for all users in this batch)
-	hashedPassword, err := utils.HashPassword(plainPassword)
-	if err != nil {
-		log.Error("Failed to hash password", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	passwordInput := strings.TrimSpace(req.Password)
+	pwParts := strings.SplitN(passwordInput, ":", 2)
+	if len(pwParts) == 2 && strings.EqualFold(strings.TrimSpace(pwParts[0]), "random") {
+		randomLen, parseErr := strconv.Atoi(strings.TrimSpace(pwParts[1]))
+		if parseErr != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid password format, use random:<length>"})
+		}
+		if randomLen < 6 || randomLen > 32 {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "random password length must be between 6 and 32"})
+		}
+		isRandomPerUser = true
+		randomPasswordLength = randomLen
+	} else {
+		fixedPlainPassword, err = resolveBulkPasswordSpec(req.Password)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		fixedHashedPassword, err = utils.HashPassword(fixedPlainPassword)
+		if err != nil {
+			log.Error("Failed to hash password", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 	}
 
 	// Step 5: Create users in a single transaction
@@ -746,6 +764,21 @@ func BulkCreateUserHandler(c echo.Context) error {
 	defer tx.Rollback()
 
 	for i, username := range finalUsernames {
+		// Resolve password for this user
+		var plainPassword, hashedPassword string
+		if isRandomPerUser {
+			plainPassword = generateSecurePassword(randomPasswordLength)
+			hashedPassword, err = utils.HashPassword(plainPassword)
+			if err != nil {
+				log.Warn("Failed to hash password for user", logger.String("email", username), logger.Err(err))
+				skippedUsers = append(skippedUsers, map[string]string{"email": username, "reason": "failed to hash password"})
+				continue
+			}
+		} else {
+			plainPassword = fixedPlainPassword
+			hashedPassword = fixedHashedPassword
+		}
+
 		// Insert user
 		_, err = tx.Exec(
 			"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, 1, NOW(), NOW(), ?, ?, ?, ?)",
