@@ -95,3 +95,54 @@ type EmailAddress struct {
 	Name    string `json:"name,omitempty"`
 	Address string `json:"address"`
 }
+
+// SentEmail represents an email sent by a user
+type SentEmail struct {
+	ID                string     `json:"id"`
+	UserID            int64      `db:"user_id" json:"-"`
+	FromEmail         string     `db:"from_email" json:"from"`
+	ToEmail           string     `db:"to_email" json:"to"`
+	Subject           string     `db:"subject" json:"subject"`
+	BodyPreview       string     `db:"body_preview" json:"body_preview"`
+	Body              string     `db:"body" json:"body,omitempty"`
+	Attachments       string     `db:"attachments" json:"attachments,omitempty"`
+	Provider          string     `db:"provider" json:"provider,omitempty"`
+	ProviderMessageID string     `db:"provider_message_id" json:"provider_message_id,omitempty"`
+	Status            string     `db:"status" json:"status"`
+	ErrorMessage      string     `db:"error_message" json:"error_message,omitempty"`
+	SentAt            *time.Time `db:"sent_at" json:"sent_at"`
+	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+	HasAttachments    bool       `json:"has_attachments"`
+}
+
+// SentEmailDB represents the database structure
+type SentEmailDB struct {
+	ID                int64      `db:"id"`
+	UserID            int64      `db:"user_id"`
+	FromEmail         string     `db:"from_email"`
+	ToEmail           string     `db:"to_email"`
+	Subject           string     `db:"subject"`
+	BodyPreview       *string    `db:"body_preview"`
+	Body              string     `db:"body"`
+	Attachments       *string    `db:"attachments"`
+	Provider          *string    `db:"provider"`
+	ProviderMessageID *string    `db:"provider_message_id"`
+	Status            string     `db:"status"`
+	ErrorMessage      *string    `db:"error_message"`
+	SentAt            *time.Time `db:"sent_at"`
+	CreatedAt         time.Time  `db:"created_at"`
+}
+
+// UserSentEmailsResponse represents the paginated response for user's sent emails
+type UserSentEmailsResponse struct {
+	Data       []SentEmail        `json:"data"`
+	Pagination PaginationResponse `json:"pagination"`
+}
+
+// PaginationResponse represents pagination info
+type PaginationResponse struct {
+	Page       int `json:"page"`
+	Limit      int `json:"limit"`
+	Total      int `json:"total"`
+	TotalPages int `json:"total_pages"`
+}

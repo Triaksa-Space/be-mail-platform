@@ -2,12 +2,12 @@ package email
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -18,8 +18,11 @@ import (
 	"unicode"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
+	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
+	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/Triaksa-Space/be-mail-platform/utils"
 	"github.com/google/uuid"
 
@@ -56,14 +59,18 @@ type WebhookPayload struct {
 	Type      string     `json:"type"`
 }
 
-func DeductEmailLimit(userID int64) error {
-	// Increment counter
-	_, err := config.DB.Exec(`UPDATE users SET sent_emails = sent_emails - 1, last_login = NOW() WHERE id = ?`, userID)
-	return err
+// EmailQuota represents the current email sending quota for a user.
+type EmailQuota struct {
+	Sent     int        `json:"sent"`
+	Limit    int        `json:"limit"`
+	ResetsAt *time.Time `json:"resets_at"`
 }
 
+const maxDailyEmails = 3
+
 func HandleEmailBounceHandler(c echo.Context) error {
-	// Bind the JSON payload to the struct
+	log := logger.Get().WithComponent("email_bounce")
+
 	var payload WebhookPayload
 	if err := c.Bind(&payload); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
@@ -71,18 +78,20 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		})
 	}
 
-	// Process the data (e.g., log the bounce, update the database, etc.)
-	// For demonstration, we'll just print the payload
-	fmt.Printf("Received webhook payload: %+v\n", payload)
-	// fmt.Println("payload.Data.From", payload.Data.From)
+	log.Info("Received email bounce webhook",
+		logger.String("type", payload.Type),
+		logger.String("email_id", payload.Data.EmailID),
+		logger.String("from", payload.Data.From),
+	)
+
 	userID, err := getUserByEmail(payload.Data.From)
 	if err != nil {
+		log.Warn("Failed to fetch user by email", logger.Email(payload.Data.From), logger.Err(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
 	}
 
-	// SEND EMAIL TO SENDER using EMAIL_SUPPORT
 	emailSupport := viper.GetString("EMAIL_SUPPORT")
 	nameSupport := viper.GetString("NAME_SUPPORT")
 
@@ -93,11 +102,10 @@ func HandleEmailBounceHandler(c echo.Context) error {
 
 	err = process10Emails(int64(userID), payload.Data.From)
 	if err != nil {
-		fmt.Println("Failed to process incoming emails", err)
+		log.Warn("Failed to process incoming emails", logger.Err(err))
 	}
-	fmt.Println("Finish refresh internal mailbox")
+	log.Debug("Finished refresh internal mailbox")
 
-	// TODO: MAKE STANDARD BOUNCE EMAIL
 	sendTo := ""
 	notificationSubject := ""
 	notificationBody := ""
@@ -106,9 +114,7 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		sendTo = payload.Data.To[0]
 	}
 
-	// Check if bounce is 'address not found'
 	if payload.Type == "email.bounced" {
-		// Send custom notification email to sender
 		notificationSubject = "Bounce Notification: Address Not Found"
 		notificationBody = fmt.Sprintf(`
             <p>Your email to %s failed to deliver because the address was not found.</p>
@@ -127,29 +133,22 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		}
 	}
 
-	// Normalize the datetime string
 	normalizedTimeStr := strings.Replace(payload.Data.CreatedAt, " ", "T", 1)
 	if strings.HasSuffix(normalizedTimeStr, "+00") || strings.HasSuffix(normalizedTimeStr, "-00") {
 		normalizedTimeStr += ":00"
 	}
 
-	// Define a layout matching the normalized datetime string
 	const layout = "2006-01-02T15:04:05.999999-07:00"
-
-	// Parse the datetime string to a time.Time object
 	timestamp, err := time.Parse(layout, normalizedTimeStr)
 	if err != nil {
-		fmt.Printf("Failed to parse datetime: %v\n", err)
+		log.Error("Failed to parse datetime", err, logger.String("datetime", payload.Data.CreatedAt))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to parse datetime",
 		})
 	}
 
-	// Format the time.Time object to a MySQL-compatible datetime string
 	formattedTimestamp := timestamp.Format("2006-01-02 15:04:05")
 
-	// Insert into user email that his email failed to send
-	// Insert the processed email into the emails table
 	_, err = config.DB.Exec(`
 	INSERT INTO emails (
 		user_id,
@@ -172,59 +171,97 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		notificationSubject,
 		preview,
 		notificationBody,
-		"inbox", // Set email_type as needed
+		"inbox",
 		"",
 		payload.Data.EmailID,
 		formattedTimestamp,
 	)
 	if err != nil {
-		fmt.Printf("Failed to insert email %s into DB: %v\n", payload.Data.EmailID, err)
+		log.Error("Failed to insert bounce email into DB", err,
+			logger.String("email_id", payload.Data.EmailID),
+			logger.UserID(int64(userID)),
+		)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to insert bounce email into DB" + err.Error(),
 		})
 	}
 
-	// Return a success response
+	admin.IncrementCounter("total_inbox", 1)
+
+	log.Info("Email bounce processed successfully", logger.String("email_id", payload.Data.EmailID))
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email bounce notification received",
 	})
 }
 
-func CheckEmailLimit(userID int64) error {
-	var user user.User
-	err := config.DB.Get(&user, `
-        SELECT sent_emails, last_email_time 
-        FROM users 
+// GetEmailQuota returns the current email quota for a user, resetting the window if expired.
+func GetEmailQuota(userID int64) (*EmailQuota, error) {
+	var u user.User
+	err := config.DB.Get(&u, `
+        SELECT sent_emails, last_email_time
+        FROM users
         WHERE id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrowMidnight := todayMidnight.Add(24 * time.Hour)
+
+	// Reset at midnight: if no last_email_time or it's from a previous day
+	if u.LastEmailTime == nil || u.LastEmailTime.Before(todayMidnight) {
+		_, err := config.DB.Exec(`
+            UPDATE users
+            SET sent_emails = 0,
+                last_email_time = NOW()
+            WHERE id = ?`, userID)
+		if err != nil {
+			return nil, err
+		}
+		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
+	}
+
+	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
+}
+
+func CheckEmailLimit(userID int64) error {
+	quota, err := GetEmailQuota(userID)
 	if err != nil {
 		return err
 	}
-
-	if user.SentEmails >= 3 {
-		return errors.New("daily email limit exceeded (3 emails per 24 hours)")
+	if quota.Sent >= quota.Limit {
+		return errors.New("daily email limit exceeded")
 	}
+	return nil
+}
 
-	if user.SentEmails == 0 {
-		// first time sent email
-		_, err := config.DB.Exec(`
-            UPDATE users 
-            SET sent_emails = 0, 
-                last_email_time = NOW() 
-            WHERE id = ?`, userID)
-		return err
+// GetEmailQuotaHandler returns the current email quota for the authenticated user.
+func GetEmailQuotaHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+	quota, err := GetEmailQuota(userID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch email quota",
+		})
 	}
+	return c.JSON(http.StatusOK, quota)
+}
 
-	// Reset counter if 24h passed
-	if time.Since(*user.LastEmailTime) > 24*time.Hour {
-		_, err := config.DB.Exec(`
-            UPDATE users 
-            SET sent_emails = 0, 
-                last_email_time = NOW() 
-            WHERE id = ?`, userID)
-		return err
+// emailLimitExceededResponse returns a standardized 429 response with quota info.
+func emailLimitExceededResponse(c echo.Context, userID int64) error {
+	resp := map[string]interface{}{
+		"error": "Daily email limit reached",
+		"code":  apperrors.ErrCodeEmailLimitExceeded,
 	}
-
-	return err
+	// Try to include resets_at for the frontend
+	quota, err := GetEmailQuota(userID)
+	if err == nil && quota.ResetsAt != nil {
+		resp["resets_at"] = quota.ResetsAt
+		resp["sent"] = quota.Sent
+		resp["limit"] = quota.Limit
+	}
+	return c.JSON(http.StatusTooManyRequests, resp)
 }
 
 // DeleteUrlAttachmentHandler handles deleting an attachment from AWS S3 based on a provided URL
@@ -281,23 +318,20 @@ func DeleteUrlAttachmentHandler(c echo.Context) error {
 	})
 }
 
-// SendEmailUrlAttachmentHandler handles sending emails with attachment URLs
 func SendEmailUrlAttachmentHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
 
-	emailUser, err := getUserEmail(userID)
+	emailUser, err := getUserEmailWithTimeout(userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
 	}
 
-	// Check email limit
-	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+	// Check email limit with timeout
+	if err := CheckEmailLimitWithTimeout(userID); err != nil {
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse JSON payload
@@ -332,13 +366,14 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
+	// Save email to database with timeout-enabled transaction
+	tx, ctx, cancel, err := config.BeginTxWithTimeout(10 * time.Second)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to start transaction",
 		})
 	}
+	defer cancel()
 	defer tx.Rollback()
 
 	attachmentsJSON, _ := json.Marshal(req.Attachments)
@@ -349,7 +384,7 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 		preview = req.Body[:length]
 	}
 	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
         INSERT INTO emails (
             user_id,
             email_type,
@@ -380,14 +415,14 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 		})
 	}
 
-	// Update last login
-	err = updateLastLogin(userID)
+	// Update last login with timeout
+	err = updateLastLoginWithTimeout(userID)
 	if err != nil {
 		fmt.Println("error updateLastLogin", err)
 	}
 
-	// Update limit if sent Email success
-	err = updateLimitSentEmails(userID)
+	// Update limit if sent Email success with timeout
+	err = updateLimitSentEmailsWithTimeout(userID)
 	if err != nil {
 		fmt.Println("error updateLimitSentEmails", err)
 	}
@@ -399,29 +434,27 @@ func SendEmailUrlAttachmentHandler(c echo.Context) error {
 
 // SendEmailHandler handles sending emails with attachments
 func SendEmailHandler(c echo.Context) error {
-	// Get user ID and email from context
+	log := logger.Get().WithComponent("email_send")
 	userID := c.Get("user_id").(int64)
+	log = log.WithUserID(userID)
 
 	emailUser, err := getUserEmail(userID)
 	if err != nil {
+		log.Error("Failed to fetch user email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
 	}
 
-	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		log.Warn("Email limit exceeded", logger.Email(emailUser))
+		return emailLimitExceededResponse(c, userID)
 	}
 
-	// Parse form data
 	to := c.FormValue("to")
 	subject := c.FormValue("subject")
 	body := c.FormValue("body")
 
-	// Prepare attachments and upload to S3
 	var attachments []pkg.Attachment
 	var attachmentURLs []string
 
@@ -436,6 +469,7 @@ func SendEmailHandler(c echo.Context) error {
 	for _, file := range files {
 		src, err := file.Open()
 		if err != nil {
+			log.Error("Failed to open attachment", err, logger.String("filename", file.Filename))
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Failed to open attachment",
 			})
@@ -444,19 +478,16 @@ func SendEmailHandler(c echo.Context) error {
 
 		content, err := io.ReadAll(src)
 		if err != nil {
+			log.Error("Failed to read attachment", err, logger.String("filename", file.Filename))
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Failed to read attachment",
 			})
 		}
 
-		// Convert filename to lowercase and replace spaces with underscores
 		filename := strings.ToLower(file.Filename)
 		filename = strings.ReplaceAll(filename, " ", "_")
-
-		// Append the attachment URL to the list
 		attachmentURLs = append(attachmentURLs, filename)
 
-		// Prepare the attachment for sending email
 		attachments = append(attachments, pkg.Attachment{
 			Filename:    filename,
 			ContentType: file.Header.Get("Content-Type"),
@@ -464,75 +495,51 @@ func SendEmailHandler(c echo.Context) error {
 		})
 	}
 
-	// Send email via pkg/aws
 	err = pkg.SendEmail(to, emailUser, subject, body, attachments)
 	if err != nil {
-		fmt.Println("Failed to send email", err)
+		log.Error("Failed to send email", err, logger.String("to", to))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
-
-	var preview string
-	length := 25
-	if len(body) > length {
-		preview = body[:length]
+	preview := generatePreview("", body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
+
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'ses', 'sent', NOW(), NOW())`,
+		userID, emailUser, to, subject, preview, body, attachmentsJSON)
 	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+		log.Warn("Email sent but failed to save to sent_emails", logger.Err(err))
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	if err := updateLastLogin(userID); err != nil {
+		log.Warn("Failed to update last login", logger.Err(err))
 	}
 
-	// Update last login
-	err = updateLastLogin(userID)
-	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+	if err := updateLimitSentEmails(userID); err != nil {
+		log.Warn("Failed to update sent email limit", logger.Err(err))
 	}
 
-	// Update limit if sent Email success
-	err = updateLimitSentEmails(userID)
-	if err != nil {
-		fmt.Println("error updateLimitSentEmails", err)
-	}
-
+	log.Info("Email sent successfully", logger.String("to", to), logger.String("subject", subject))
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Email sent successfully",
 	})
@@ -552,9 +559,7 @@ func SendEmailViaResendHandler(c echo.Context) error {
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse JSON payload
@@ -589,62 +594,46 @@ func SendEmailViaResendHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(req.Attachments)
 
-	var preview string
-	length := 25
-	if len(req.Body) > length {
-		preview = req.Body[:length]
+	// Generate preview (strip HTML and limit length)
+	preview := generatePreview("", req.Body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, req.Subject, req.Body, attachmentsJSON, userID, userID)
+
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'resend', 'sent', NOW(), NOW())`,
+		userID, emailUser, req.To, req.Subject, preview, req.Body, attachmentsJSON)
 	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
+		// Don't return error since email was sent successfully
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
-	}
-
-	// Update last login
-	err = updateLastLogin(userID)
+	// Update last login with timeout
+	err = updateLastLoginWithTimeout(userID)
 	if err != nil {
 		fmt.Println("error updateLastLogin", err)
 	}
 
-	// Update limit if sent Email success
-	err = updateLimitSentEmails(userID)
+	// Update limit if sent Email success with timeout
+	err = updateLimitSentEmailsWithTimeout(userID)
 	if err != nil {
 		fmt.Println("error updateLimitSentEmails", err)
 	}
@@ -668,9 +657,7 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse form data
@@ -730,52 +717,35 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
 
-	var preview string
-	length := 25
-	if len(body) > length {
-		preview = body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview
+	preview := generatePreview("", body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'haraka', 'sent', NOW(), NOW())`,
+		userID, emailUser, to, subject, preview, body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login
@@ -795,7 +765,7 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 	})
 }
 
-// SendEmailHandler handles sending emails with attachments
+// SendEmailSMTPHandler handles sending emails via SMTP with attachments
 func SendEmailSMTPHandler(c echo.Context) error {
 	// Get user ID and email from context
 	userID := c.Get("user_id").(int64)
@@ -809,9 +779,7 @@ func SendEmailSMTPHandler(c echo.Context) error {
 
 	// Check email limit
 	if err := CheckEmailLimit(userID); err != nil {
-		return c.JSON(http.StatusTooManyRequests, map[string]string{
-			"error": "Email limit exceeded",
-		})
+		return emailLimitExceededResponse(c, userID)
 	}
 
 	// Parse form data
@@ -871,52 +839,35 @@ func SendEmailSMTPHandler(c echo.Context) error {
 		})
 	}
 
-	// Save email to database
-	tx, err := config.DB.Begin()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to start transaction",
-		})
-	}
-	defer tx.Rollback()
-
+	// Save email to sent_emails table for tracking
 	attachmentsJSON, _ := json.Marshal(attachmentURLs)
 
-	var preview string
-	length := 25
-	if len(body) > length {
-		preview = body[:length]
-	}
-	originalUsername := strings.Split(emailUser, "@")[0]
-	_, err = tx.Exec(`
-        INSERT INTO emails (
-            user_id,
-            email_type,
-            preview,
-            sender_email,
-            sender_name,
-            subject,
-            body,
-            attachments,
-            timestamp,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-        ) 
-        VALUES (?, "sent", ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), ?, ?)`,
-		userID, preview, emailUser, originalUsername, subject, body, attachmentsJSON, userID, userID)
-	if err != nil {
-		fmt.Println("Email sent but Failed to save into DB email", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Email sent but Failed to save into DB email",
-		})
+	// Generate preview
+	preview := generatePreview("", body)
+	if len(preview) > 500 {
+		preview = preview[:500]
 	}
 
-	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to commit transaction",
-		})
+	_, err = config.DB.Exec(`
+		INSERT INTO sent_emails (
+			user_id,
+			from_email,
+			to_email,
+			subject,
+			body_preview,
+			body,
+			attachments,
+			provider,
+			status,
+			sent_at,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'smtp', 'sent', NOW(), NOW())`,
+		userID, emailUser, to, subject, preview, body, attachmentsJSON)
+	if err != nil {
+		fmt.Println("Email sent but failed to save to sent_emails:", err)
+	} else {
+		admin.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login
@@ -939,102 +890,92 @@ func SendEmailSMTPHandler(c echo.Context) error {
 func GetFileEmailToDownloadHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 	roleID := c.Get("role_id").(int64)
-	// Get email ID and file URL from the request parameters
-	// emailID := c.Param("id")
-	// fileURL := c.Param("file_url")
-	// Define a struct to parse the JSON payload
+
 	type RequestPayload struct {
 		EmailID string `json:"email_id"`
 		FileURL string `json:"file_url"`
 	}
 
-	// Parse the JSON payload
 	var payload RequestPayload
 	if err := c.Bind(&payload); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
 	}
 
-	emailID := payload.EmailID
-	fileURL := payload.FileURL
-
-	// Fetch the email record from the database
-	var email Email
-	var query string
-	var err error
-
-	if roleID == 1 {
-		query = `SELECT id, 
-            user_id, 
-            sender_email, sender_name, 
-            subject, 
-            body,
-			preview,
-			message_id,
-			attachments,
-            timestamp, 
-            created_at, 
-            updated_at  FROM emails WHERE id = ? and user_id = ?`
-
-		err = config.DB.Get(&email, query, emailID, userID)
-	} else {
-		query = `SELECT id, 
-			user_id, 
-			sender_email, sender_name, 
-			subject, 
-			body,
-			preview,
-			message_id,
-			attachments,
-			timestamp, 
-			created_at, 
-			updated_at  FROM emails WHERE id = ?`
-
-		err = config.DB.Get(&email, query, emailID)
+	if strings.TrimSpace(payload.FileURL) == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "file_url is required"})
 	}
 
-	if err != nil {
-		fmt.Println("Failed to fetch email", err)
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
-	}
+	downloadURL := ""
 
-	// Extract the file URL from the email record
-	var attachmentURLs []string
-	if err := json.Unmarshal([]byte(email.Attachments), &attachmentURLs); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to parse attachments"})
-	}
+	if strings.TrimSpace(payload.EmailID) != "" {
+		emailID, err := decodeEmailID(payload.EmailID)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid email ID"})
+		}
 
-	// Find the matching file URL
-	var downloadURL string
-	for _, url := range attachmentURLs {
-		if strings.Contains(url, fileURL) {
-			downloadURL = url
-			break
+		foundInSource := false
+
+		urlFromInbox, found, err := findDownloadURLByID("emails", userID, roleID, emailID, payload.FileURL)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch email attachments"})
+		}
+		if found {
+			foundInSource = true
+			downloadURL = urlFromInbox
+		}
+
+		if downloadURL == "" {
+			urlFromSent, found, err := findDownloadURLByID("sent_emails", userID, roleID, emailID, payload.FileURL)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch sent email attachments"})
+			}
+			if found {
+				foundInSource = true
+				downloadURL = urlFromSent
+			}
+		}
+
+		// If caller explicitly sent email_id and record was found but file isn't in that record.
+		if foundInSource && downloadURL == "" {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "File not found"})
 		}
 	}
 
+	// Fallback path: resolve by file_url only across inbox + sent tables.
+	if downloadURL == "" {
+		urlByFileOnly, err := findDownloadURLByFileURL(userID, roleID, payload.FileURL)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch attachment"})
+		}
+		downloadURL = urlByFileOnly
+	}
 	if downloadURL == "" {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "File not found"})
 	}
 
-	// Parse the S3 URL to get the bucket name and key
 	parsedURL, err := url.Parse(downloadURL)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to parse file URL"})
 	}
 
-	bucket := strings.Split(parsedURL.Host, ".")[0]
-	key := strings.TrimPrefix(parsedURL.Path, "/")
+	hostParts := strings.Split(parsedURL.Host, ".")
+	if len(hostParts) == 0 || hostParts[0] == "" {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Invalid S3 host"})
+	}
 
-	// Initialize AWS session
+	bucket := hostParts[0]
+	key := strings.TrimPrefix(parsedURL.Path, "/")
+	if key == "" {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "File key not found"})
+	}
+
 	sess, err := pkg.InitAWS()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to initialize AWS session"})
 	}
 
-	// Create S3 client
 	s3Client := s3.New(sess)
 
-	// Get the object from S3
 	output, err := s3Client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -1044,16 +985,229 @@ func GetFileEmailToDownloadHandler(c echo.Context) error {
 	}
 	defer output.Body.Close()
 
-	// Set the response headers
-	c.Response().Header().Set(echo.HeaderContentType, *output.ContentType)
-	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%s", path.Base(key)))
+	contentType := "application/octet-stream"
+	if output.ContentType != nil && *output.ContentType != "" {
+		contentType = *output.ContentType
+	}
 
-	// Stream the file to the client
+	filename := path.Base(key)
+	filename = strings.ReplaceAll(filename, `"`, "")
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "attachment"
+	}
+
+	c.Response().Header().Set(echo.HeaderContentType, contentType)
+	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", filename, url.QueryEscape(filename)))
+
 	if _, err := io.Copy(c.Response().Writer, output.Body); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to stream file"})
 	}
 
 	return nil
+}
+
+func findDownloadURLByID(table string, userID, roleID, emailID int64, requestFileURL string) (string, bool, error) {
+	type row struct {
+		Attachments string `db:"attachments"`
+	}
+
+	var record row
+	var err error
+	if roleID == 1 {
+		query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE id = ? AND user_id = ? LIMIT 1`, table)
+		err = config.DB.Get(&record, query, emailID, userID)
+	} else {
+		query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE id = ? LIMIT 1`, table)
+		err = config.DB.Get(&record, query, emailID)
+	}
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	attachmentURLs, err := parseAttachmentURLs(record.Attachments)
+	if err != nil {
+		return "", true, err
+	}
+
+	return findMatchingAttachmentURL(attachmentURLs, requestFileURL), true, nil
+}
+
+func findDownloadURLByFileURL(userID, roleID int64, requestFileURL string) (string, error) {
+	key := extractS3ObjectKey(requestFileURL)
+	if key == "" {
+		key = extractAttachmentFilename(requestFileURL)
+	}
+	if key == "" {
+		return "", nil
+	}
+
+	// Key search in attachments JSON reduces rows before exact matching in Go.
+	pattern := "%" + key + "%"
+	for _, table := range []string{"emails", "sent_emails"} {
+		type row struct {
+			Attachments string `db:"attachments"`
+		}
+
+		var rows []row
+		var err error
+		if roleID == 1 {
+			query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE user_id = ? AND attachments LIKE ? ORDER BY id DESC LIMIT 100`, table)
+			err = config.DB.Select(&rows, query, userID, pattern)
+		} else {
+			query := fmt.Sprintf(`SELECT COALESCE(attachments, '') AS attachments FROM %s WHERE attachments LIKE ? ORDER BY id DESC LIMIT 100`, table)
+			err = config.DB.Select(&rows, query, pattern)
+		}
+		if err != nil {
+			return "", err
+		}
+
+		for _, r := range rows {
+			attachmentURLs, err := parseAttachmentURLs(r.Attachments)
+			if err != nil {
+				continue
+			}
+			if matched := findMatchingAttachmentURL(attachmentURLs, requestFileURL); matched != "" {
+				return matched, nil
+			}
+		}
+	}
+
+	return "", nil
+}
+
+func parseAttachmentURLs(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}, nil
+	}
+
+	var attachmentURLs []string
+	if err := json.Unmarshal([]byte(raw), &attachmentURLs); err != nil {
+		return nil, err
+	}
+
+	return attachmentURLs, nil
+}
+
+func decodeEmailID(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, errors.New("empty email_id")
+	}
+
+	if decodedID, err := utils.DecodeID(raw); err == nil {
+		return int64(decodedID), nil
+	}
+
+	parsedID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsedID <= 0 {
+		return 0, errors.New("invalid email_id")
+	}
+
+	return parsedID, nil
+}
+
+func findMatchingAttachmentURL(attachmentURLs []string, requestFileURL string) string {
+	requestFileURL = strings.TrimSpace(requestFileURL)
+	if requestFileURL == "" {
+		return ""
+	}
+
+	requestedKey := extractS3ObjectKey(requestFileURL)
+	requestedFilename := extractAttachmentFilename(requestFileURL)
+
+	for _, attachmentURL := range attachmentURLs {
+		if normalizeURLForCompare(attachmentURL) == normalizeURLForCompare(requestFileURL) {
+			return attachmentURL
+		}
+	}
+
+	if requestedKey != "" {
+		for _, attachmentURL := range attachmentURLs {
+			if extractS3ObjectKey(attachmentURL) == requestedKey {
+				return attachmentURL
+			}
+		}
+	}
+
+	if requestedFilename != "" {
+		for _, attachmentURL := range attachmentURLs {
+			if extractAttachmentFilename(attachmentURL) == requestedFilename {
+				return attachmentURL
+			}
+		}
+	}
+
+	return ""
+}
+
+func extractAttachmentFilename(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return path.Base(rawURL)
+	}
+
+	filename := path.Base(parsedURL.Path)
+	if filename == "." || filename == "/" {
+		return ""
+	}
+	if decoded, err := url.PathUnescape(filename); err == nil {
+		return decoded
+	}
+	return filename
+}
+
+func extractS3ObjectKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.TrimLeft(rawURL, "/")
+	}
+
+	key := strings.TrimLeft(parsedURL.Path, "/")
+	if key == "" {
+		return ""
+	}
+
+	if decoded, err := url.PathUnescape(key); err == nil {
+		return decoded
+	}
+
+	return key
+}
+
+func normalizeURLForCompare(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	if decodedPath, err := url.PathUnescape(parsed.Path); err == nil {
+		parsed.Path = decodedPath
+	}
+
+	return parsed.String()
 }
 
 func GetEmailHandler(c echo.Context) error {
@@ -1071,50 +1225,50 @@ func GetEmailHandler(c echo.Context) error {
 	emailID = strconv.Itoa(emailIDDecode)
 
 	var user user.User
-	err = config.DB.Get(&user, `
+	err = config.GetWithTimeout(&user, `
 			SELECT id, email, role_id, last_login, sent_emails, last_email_time, created_at, updated_at
 			FROM users 
-			WHERE id = ?`, userID)
+			WHERE id = ?`, 5*time.Second, userID)
 	if err != nil {
 		return err
 	}
 
-	// Fetch email details by ID
+	// Fetch email details by ID with timeout
 	var email Email
 	if user.RoleID == 1 {
-		err = config.DB.Get(&email, `SELECT id, 
+		err = config.GetWithTimeout(&email, `SELECT id, 
             user_id, 
             sender_email, sender_name, 
             subject, 
             body,
 			preview,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
             timestamp, 
             created_at, 
-            updated_at  FROM emails WHERE id = ? and user_id = ? and email_type = "inbox"`, emailID, user.ID)
+            updated_at  FROM emails WHERE id = ? and user_id = ? and email_type = "inbox"`, 10*time.Second, emailID, user.ID)
 		if err != nil {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
 		}
 	} else {
-		err = config.DB.Get(&email, `SELECT id, 
+		err = config.GetWithTimeout(&email, `SELECT id, 
             user_id, 
             sender_email, sender_name, 
             subject, 
             body,
 			preview,
 			message_id,
-			attachments,
+			COALESCE(attachments, '') AS attachments,
             timestamp, 
             created_at, 
-            updated_at  FROM emails WHERE id = ? and email_type = "inbox"`, emailID)
+            updated_at  FROM emails WHERE id = ? and email_type = "inbox"`, 10*time.Second, emailID)
 		if err != nil {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
 		}
 	}
 
-	// Get User From Email
-	userFromEmail, _ := getUserEmail(email.UserID)
+	// Get User From Email with timeout
+	userFromEmail, _ := getUserEmailWithTimeout(email.UserID)
 
 	var emailResp EmailResponse
 	emailResp.Email = email
@@ -1122,17 +1276,23 @@ func GetEmailHandler(c echo.Context) error {
 	emailResp.ListAttachments = getAttachmentURLs(email.Attachments)
 	emailResp.From = userFromEmail
 
-	// Update last login
-	err = updateLastLogin(userID)
+	// Update last login with timeout
+	err = updateLastLoginWithTimeout(userID)
 	if err != nil {
 		fmt.Println("error updateLastLogin", err)
 	}
 
 	if user.RoleID == 1 {
-		// Update isRead
-		err = updateIsRead(emailID)
+		// Update isRead with timeout
+		err = updateIsReadWithTimeout(emailID)
 		if err != nil {
 			fmt.Println("error updateIsRead", err)
+		}
+	} else {
+		// Admin/superadmin ID: 2 or 0 read state is tracked independently from user read state.
+		err = updateIsReadAdminWithTimeout(emailID)
+		if err != nil {
+			fmt.Println("error updateIsReadAdmin", err)
 		}
 	}
 
@@ -1172,7 +1332,7 @@ func SentEmailByIDHandler(c echo.Context) error {
 	var user user.User
 	err := config.DB.Get(&user, `
 			SELECT id, email, role_id, last_login, sent_emails, last_email_time, created_at, updated_at
-			FROM users 
+			FROM users
 			WHERE id = ?`, userID)
 	if err != nil {
 		return err
@@ -1181,10 +1341,133 @@ func SentEmailByIDHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, user)
 }
 
+// ListSentEmailsByUserIDHandler returns sent emails for a specific user (admin only)
+// GET /email/sent/by_user/:id
+func ListSentEmailsByUserIDHandler(c echo.Context) error {
+	// Decode user ID from param
+	userIDParam := c.Param("id")
+	targetUserID, err := utils.DecodeID(userIDParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid user ID",
+		})
+	}
+
+	// Pagination
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	// Get total count
+	var total int
+	err = config.DB.Get(&total, `SELECT COUNT(*) FROM sent_emails WHERE user_id = ?`, targetUserID)
+	if err != nil {
+		fmt.Println("Error counting sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Get sent emails
+	type SentEmailRow struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		FromEmail   string         `db:"from_email"`
+		ToEmail     string         `db:"to_email"`
+		Subject     string         `db:"subject"`
+		BodyPreview sql.NullString `db:"body_preview"`
+		Body        sql.NullString `db:"body"`
+		Attachments sql.NullString `db:"attachments"`
+		Provider    sql.NullString `db:"provider"`
+		IsRead      bool           `db:"is_read"`
+		Status      string         `db:"status"`
+		SentAt      sql.NullTime   `db:"sent_at"`
+		CreatedAt   time.Time      `db:"created_at"`
+	}
+
+	var emails []SentEmailRow
+	err = config.DB.Select(&emails, `
+		SELECT id, user_id, from_email, to_email, subject, body_preview, body,
+		       attachments, provider, is_read_admin AS is_read, status, sent_at, created_at
+		FROM sent_emails
+		WHERE user_id = ?
+		ORDER BY COALESCE(sent_at, created_at) DESC
+		LIMIT ? OFFSET ?
+	`, targetUserID, limit, offset)
+
+	if err != nil {
+		fmt.Println("Error fetching sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Build response
+	data := make([]map[string]interface{}, 0)
+	for _, e := range emails {
+		bodyPreview := ""
+		if e.BodyPreview.Valid {
+			bodyPreview = e.BodyPreview.String
+		}
+		body := ""
+		if e.Body.Valid {
+			body = e.Body.String
+		}
+		attachments := ""
+		if e.Attachments.Valid {
+			attachments = e.Attachments.String
+		}
+		provider := ""
+		if e.Provider.Valid {
+			provider = e.Provider.String
+		}
+		var sentAt *time.Time
+		if e.SentAt.Valid {
+			sentAt = &e.SentAt.Time
+		}
+
+		hasAttachments := attachments != "" && attachments != "[]"
+
+		data = append(data, map[string]interface{}{
+			"id":              utils.EncodeID(int(e.ID)),
+			"user_id":         utils.EncodeID(int(e.UserID)),
+			"from":            e.FromEmail,
+			"to":              e.ToEmail,
+			"subject":         e.Subject,
+			"body_preview":    bodyPreview,
+			"body":            body,
+			"attachments":     attachments,
+			"has_attachments": hasAttachments,
+			"provider":        provider,
+			"is_read":         e.IsRead,
+			"status":          e.Status,
+			"sent_at":         sentAt,
+			"created_at":      e.CreatedAt,
+		})
+	}
+
+	totalPages := (total + limit - 1) / limit
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"data": data,
+		"pagination": map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
+}
+
 func ListEmailByTokenHandler(c echo.Context) error {
 	userID := c.Get("user_id").(int64)
 
-	emailUser, err := getUserEmail(userID)
+	emailUser, err := getUserEmailWithTimeout(userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
@@ -1198,7 +1481,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
 	fmt.Println("Finish refresh internal mailbox")
 
 	var emails []Email
-	err = config.DB.Select(&emails, `SELECT id, 
+	err = config.SelectWithTimeout(&emails, `SELECT id, 
 			is_read,
             user_id, 
             sender_email, sender_name, 
@@ -1207,7 +1490,7 @@ func ListEmailByTokenHandler(c echo.Context) error {
             body,
             timestamp, 
             created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC LIMIT 10`, userID)
+            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC LIMIT 10`, 10*time.Second, userID)
 	if err != nil {
 		fmt.Println("Failed to fetch emails", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
@@ -1224,9 +1507,9 @@ func ListEmailByTokenHandler(c echo.Context) error {
 	}
 
 	// Update last login
-	err = updateLastLogin(userID)
+	err = updateLastLoginWithTimeout(userID)
 	if err != nil {
-		fmt.Println("error updateLastLogin", err)
+		fmt.Println("error updateLastLoginWithTimeout", err)
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -1234,21 +1517,41 @@ func ListEmailByTokenHandler(c echo.Context) error {
 
 func ListEmailByIDHandler(c echo.Context) error {
 	userIDStr := c.Param("id")
+	log := logger.Get().WithComponent("email_by_user")
+	log.Info("ListEmailByIDHandler start", logger.String("user_id_param", userIDStr))
 
 	userIDDecode, err := utils.DecodeID(userIDStr)
 	if err != nil {
+		log.Warn("Invalid user ID param", logger.Err(err), logger.String("user_id_param", userIDStr))
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
 	}
 
 	userID, err := strconv.ParseInt(strconv.Itoa(userIDDecode), 10, 64)
 	if err != nil {
+		log.Warn("Failed to parse decoded user ID", logger.Err(err), logger.Int("user_id_decoded", userIDDecode))
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Invalid user ID",
 		})
 	}
+	log = log.WithUserID(userID)
+
+	// Pagination
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
 
 	emailUser, err := getUserEmail(userID)
 	if err != nil {
+		log.Error("Failed to fetch user email", err, logger.Int64("user_id", userID))
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch user email",
 		})
@@ -1256,64 +1559,83 @@ func ListEmailByIDHandler(c echo.Context) error {
 
 	err = processIncomingEmails(userID, emailUser)
 	if err != nil {
-		fmt.Println("Failed to process incoming emails", err)
+		log.Warn("Failed to process incoming emails", logger.Err(err), logger.String("email_user", emailUser))
 	}
-	fmt.Println("Finish refresh internal mailbox")
+	log.Info("Finished refresh internal mailbox")
+
+	// Get total count
+	var total int
+	err = config.DB.Get(&total, `SELECT COUNT(*) FROM emails WHERE user_id = ? AND email_type = "inbox"`, userID)
+	if err != nil {
+		log.Error("Failed to count emails", err, logger.Int64("user_id", userID))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to count emails"})
+	}
 
 	var emails []Email
-	err = config.DB.Select(&emails, `SELECT id, 
-			is_read,
-            user_id, 
-            sender_email, 
-			sender_name, 
-            subject, 
+	err = config.DB.Select(&emails, `SELECT id,
+			is_read_admin AS is_read,
+            user_id,
+            sender_email,
+			sender_name,
+            subject,
             preview,
             body,
             timestamp,
 			message_id,
-			attachments, 
-            created_at, 
-            updated_at FROM emails WHERE user_id = ? and email_type = "inbox" ORDER BY timestamp DESC`, userID)
+			COALESCE(attachments, '') AS attachments,
+            created_at,
+            updated_at FROM emails WHERE user_id = ? AND email_type = "inbox" ORDER BY timestamp DESC LIMIT ? OFFSET ?`, userID, limit, offset)
 	if err != nil {
-		fmt.Println("Failed to fetch emails", err)
+		log.Error("Failed to fetch emails", err, logger.Int64("user_id", userID), logger.Int("limit", limit), logger.Int("offset", offset))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch emails"})
 	}
 
-	response := make([]EmailResponse, len(emails))
+	data := make([]EmailResponse, len(emails))
 	for i, email := range emails {
 		email.EmailEncodeID = utils.EncodeID(int(email.ID))
 		email.UserEncodeID = utils.EncodeID(int(email.UserID))
-		response[i] = EmailResponse{
+		data[i] = EmailResponse{
 			Email:        email,
 			RelativeTime: formatRelativeTime(email.Timestamp),
 		}
 		// Convert JSON string to []string
-		response[i].ListAttachments = getAttachmentURLs(email.Attachments)
+		data[i].ListAttachments = getAttachmentURLs(email.Attachments)
 	}
 
-	return c.JSON(http.StatusOK, response)
+	totalPages := (total + limit - 1) / limit
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"data": data,
+		"pagination": map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
 }
 
 func getAttachmentURLs(attachmentsJSON string) []Attachment {
 	var urls []string
+	if attachmentsJSON == "" {
+		return nil
+	}
+
+	if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
+		fmt.Printf("Failed to unmarshal attachments: %v\n", err)
+		return nil
+	}
+
 	attachments := make([]Attachment, len(urls))
+	for i, url := range urls {
+		// Extract filename from URL path
+		parts := strings.Split(url, "/")
+		filename := parts[len(parts)-1]
 
-	if attachmentsJSON != "" {
-		if err := json.Unmarshal([]byte(attachmentsJSON), &urls); err != nil {
-			fmt.Printf("Failed to unmarshal attachments: %v\n", err)
-			return nil
-		}
-
-		for i, url := range urls {
-			// Extract filename from URL path
-			parts := strings.Split(url, "/")
-			filename := parts[len(parts)-1]
-
-			attachments[i] = Attachment{
-				URL:         url,
-				ContentType: "",
-				Filename:    filename,
-			}
+		attachments[i] = Attachment{
+			URL:         url,
+			ContentType: "",
+			Filename:    filename,
 		}
 	}
 
@@ -1322,6 +1644,13 @@ func getAttachmentURLs(attachmentsJSON string) []Attachment {
 
 func DeleteEmailHandler(c echo.Context) error {
 	emailID := c.Param("id")
+
+	// Get email type before deletion to update counter
+	var emailType string
+	err := config.DB.Get(&emailType, "SELECT email_type FROM emails WHERE id = ?", emailID)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+	}
 
 	// Delete email by ID
 	result, err := config.DB.Exec("DELETE FROM emails WHERE id = ?", emailID)
@@ -1332,6 +1661,11 @@ func DeleteEmailHandler(c echo.Context) error {
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected == 0 {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Email not found"})
+	}
+
+	// Decrement inbox counter (sent emails are in sent_emails table, tracked separately)
+	if emailType == "inbox" {
+		admin.IncrementCounter("total_inbox", -1)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Email deleted successfully"})
@@ -1382,6 +1716,25 @@ func UploadAttachmentHandler(c echo.Context) error {
 	}
 
 	file := files[0]
+
+	// Block dangerous file extensions
+	blockedExts := []string{
+		".exe", ".bat", ".cmd", ".com", ".msi", ".scr", ".pif",
+		".sh", ".bash", ".csh", ".ksh", ".zsh",
+		".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1",
+		".reg", ".inf", ".hta", ".cpl", ".msc",
+		".dll", ".sys", ".drv",
+		".lnk", ".url",
+	}
+	ext := strings.ToLower(path.Ext(file.Filename))
+	for _, blocked := range blockedExts {
+		if ext == blocked {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("File type %s is not allowed", ext),
+			})
+		}
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -1418,230 +1771,12 @@ func UploadAttachmentHandler(c echo.Context) error {
 	})
 }
 
-// func GetInboxHandler(c echo.Context) error {
-// 	// // Extract user email from context (assuming middleware sets this)
-// 	// userEmail := c.Get("user_email").(string)
-
-// 	// AWS S3 configuration
-// 	bucketName := viper.GetString("S3_BUCKET_NAME") // e.g., "ses-mailsaja-received"
-// 	prefix := viper.GetString("S3_PREFIX")          // e.g., "mailsaja@inbox-all/" mailsaja@inbox-all/
-
-// 	// Initialize AWS session
-// 	sess, _ := pkg.InitAWS()
-
-// 	// Create S3 client
-// 	s3Client, _ := pkg.InitS3(sess)
-
-// 	// List objects in S3 bucket under the user's prefix
-// 	listInput := &s3.ListObjectsV2Input{
-// 		Bucket: aws.String(bucketName),
-// 		Prefix: aws.String(prefix),
-// 	}
-
-// 	var emails []ParsedEmail
-
-// 	err := s3Client.ListObjectsV2Pages(listInput, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
-// 		for _, obj := range page.Contents {
-// 			// Get the object (email)
-// 			getInput := &s3.GetObjectInput{
-// 				Bucket: aws.String(bucketName),
-// 				Key:    obj.Key,
-// 			}
-// 			getOutput, err := s3Client.GetObject(getInput)
-// 			if err != nil {
-// 				fmt.Println("Failed to get object:", err)
-// 				continue
-// 			}
-// 			defer getOutput.Body.Close()
-
-// 			// Read the object content
-// 			buf := new(bytes.Buffer)
-// 			_, err = io.Copy(buf, getOutput.Body)
-// 			if err != nil {
-// 				fmt.Println("Failed to read object content:", err)
-// 				continue
-// 			}
-
-// 			// Parse the email
-// 			emailContent := buf.String()
-// 			msg, err := mail.ReadMessage(strings.NewReader(emailContent))
-// 			if err != nil {
-// 				fmt.Println("Failed to parse email:", err)
-// 				continue
-// 			}
-
-// 			fmt.Println("msg", msg.Header)
-
-// 			parsedEmail, err := parseEmailFromBucket(msg)
-// 			if err != nil {
-// 				fmt.Printf("Failed to parse email: %v\n", err)
-// 				continue
-// 			}
-
-// 			emails = append(emails, *parsedEmail)
-// 		}
-// 		return !lastPage
-// 	})
-// 	if err != nil {
-// 		fmt.Println("Failed to list objects:", err)
-// 		return c.JSON(http.StatusInternalServerError, map[string]string{
-// 			"error": "Failed to retrieve emails",
-// 		})
-// 	}
-
-// 	return c.JSON(http.StatusOK, emails)
-// }
-
-// type RawEmailBatch struct {
-// 	MessageIDs    []string
-// 	EmailContents [][]byte
-// }
-
-// func SyncEmails() error {
-// 	fmt.Println("Syncing emails...", time.Now())
-
-// 	// AWS S3 configuration
-// 	bucketName := viper.GetString("S3_BUCKET_NAME")
-// 	prefix := viper.GetString("S3_PREFIX")
-
-// 	// Initialize AWS session
-// 	sess, err := pkg.InitAWS()
-// 	if err != nil {
-// 		return fmt.Errorf("failed to initialize AWS session: %v", err)
-// 	}
-
-// 	// Create S3 client
-// 	s3Client := s3.New(sess)
-
-// 	// Channel to send raw emails to the worker
-// 	rawEmailChan := make(chan RawEmailBatch, 1000) // Buffered channel
-
-// 	// WaitGroup to wait for workers to finish
-// 	var wg sync.WaitGroup
-
-// 	// Start worker pool
-// 	numWorkers := 1 //runtime.NumCPU() * 2 // Adjust as needed
-// 	for i := 0; i < numWorkers; i++ {
-// 		wg.Add(1)
-// 		go emailBatchWorker(i, &wg, rawEmailChan)
-// 	}
-
-// 	// List objects in S3 bucket and collect them into batches
-// 	batchSize := 100 // Define batch size
-// 	currentBatch := RawEmailBatch{
-// 		MessageIDs:    []string{},
-// 		EmailContents: [][]byte{},
-// 	}
-
-// 	err = s3Client.ListObjectsV2Pages(&s3.ListObjectsV2Input{
-// 		Bucket: aws.String(bucketName),
-// 		Prefix: aws.String(prefix),
-// 	}, func(page *s3.ListObjectsV2Output, lastPage bool) bool {
-// 		for _, obj := range page.Contents {
-// 			messageID := *obj.Key
-// 			if messageID == "" {
-// 				continue
-// 			}
-
-// 			// Get the email object
-// 			output, err := s3Client.GetObject(&s3.GetObjectInput{
-// 				Bucket: aws.String(bucketName),
-// 				Key:    aws.String(messageID),
-// 			})
-// 			if err != nil {
-// 				fmt.Printf("Failed to get object %s: %v\n", messageID, err)
-// 				continue
-// 			}
-// 			defer output.Body.Close()
-
-// 			// Read the email content
-// 			buf := new(bytes.Buffer)
-// 			buf.ReadFrom(output.Body)
-// 			emailContent := buf.Bytes()
-
-// 			// Append to current batch
-// 			currentBatch.MessageIDs = append(currentBatch.MessageIDs, messageID)
-// 			currentBatch.EmailContents = append(currentBatch.EmailContents, emailContent)
-
-// 			// If batch size is reached, send to worker
-// 			if len(currentBatch.MessageIDs) >= batchSize {
-// 				rawEmailChan <- currentBatch
-// 				currentBatch = RawEmailBatch{
-// 					MessageIDs:    []string{},
-// 					EmailContents: [][]byte{},
-// 				}
-// 			}
-// 		}
-// 		return !lastPage
-// 	})
-
-// 	if err != nil {
-// 		close(rawEmailChan)
-// 		return fmt.Errorf("failed to list objects: %v", err)
-// 	}
-
-// 	// Send any remaining emails in the last batch
-// 	if len(currentBatch.MessageIDs) > 0 {
-// 		rawEmailChan <- currentBatch
-// 	}
-
-// 	// Close the channel to signal workers to finish
-// 	close(rawEmailChan)
-
-// 	// Wait for all workers to finish
-// 	wg.Wait()
-
-// 	fmt.Println("Sync completed.")
-// 	return nil
-// }
-
-// func emailBatchWorker(workerID int, wg *sync.WaitGroup, rawEmailChan <-chan RawEmailBatch) {
-// 	fmt.Println("Worker", workerID, "starting", time.Now())
-// 	defer wg.Done()
-// 	for batch := range rawEmailChan {
-// 		fmt.Printf("Worker %d processing batch of %d emails\n", workerID, len(batch.MessageIDs))
-// 		err := insertRawEmailBatch(batch)
-// 		if err != nil {
-// 			fmt.Printf("Worker %d: Error inserting batch: %v\n", workerID, err)
-// 		}
-// 	}
-// 	fmt.Println("Worker", workerID, "finish", time.Now())
-// 	fmt.Printf("Worker %d exiting\n", workerID)
-// }
-
-// func insertRawEmailBatch(batch RawEmailBatch) error {
-// 	fmt.Println("Inserting batch of emails...", time.Now())
-// 	fmt.Println("Batch size", len(batch.MessageIDs))
-// 	// Prepare the SQL statement
-// 	query := `
-//         INSERT INTO incoming_emails (message_id, email_data, created_at, processed)
-//         VALUES `
-// 	valueStrings := []string{}
-// 	valueArgs := []interface{}{}
-
-// 	for i := range batch.MessageIDs {
-// 		valueStrings = append(valueStrings, "(?, ?, NOW(), false)")
-// 		valueArgs = append(valueArgs, batch.MessageIDs[i], batch.EmailContents[i])
-// 	}
-
-// 	query += strings.Join(valueStrings, ",")
-// 	query += ";"
-
-// 	// Execute the batch insert
-// 	_, err := config.DB.Exec(query, valueArgs...)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to insert raw email batch: %v", err)
-// 	}
-// 	fmt.Println("Finish batch of emails.", time.Now())
-// 	return nil
-// }
-
 func SyncSentEmails() error {
 	fmt.Println("Syncing sent emails...", time.Now())
 
 	// Define the SQL query to fetch sent emails older than 7 days
 	query := `
-        SELECT id, attachments, timestamp
+        SELECT id, COALESCE(attachments, '') AS attachments, timestamp
         FROM emails
         WHERE email_type = 'sent' 
           AND timestamp <= NOW() - INTERVAL 7 DAY
@@ -2000,7 +2135,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 				attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
 				attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
 				if err != nil {
-					log.Printf("Failed to upload attachment: %v", err)
+					fmt.Printf("Failed to upload attachment: %v\n", err)
 					continue
 				}
 
@@ -2072,6 +2207,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 					continue
 				}
 
+				admin.IncrementCounter("total_inbox", 1)
 				stats.NewEmails++
 			}
 		}
@@ -2205,17 +2341,11 @@ func removeNonPrintable(s string) string {
 }
 
 func updateLimitSentEmails(userID int64) error {
-	// Increment counter
 	_, err := config.DB.Exec(`
-        UPDATE users 
-        SET sent_emails = sent_emails + 1,
-		last_login = NOW()
+        UPDATE users
+        SET sent_emails = sent_emails + 1
         WHERE id = ?`, userID)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func updateIsRead(emailID string) error {
@@ -2297,7 +2427,7 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 			attachmentKey := fmt.Sprintf("attachments/%s/%s", email.ID, att.FileName)
 			attachmentURL, err := pkg.UploadAttachment(att.Content, attachmentKey, att.ContentType)
 			if err != nil {
-				log.Printf("Failed to upload attachment: %v", err)
+				fmt.Printf("Failed to upload attachment: %v\n", err)
 				continue
 			}
 			attachmentURLs = append(attachmentURLs, attachmentURL)
@@ -2368,6 +2498,8 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 			fmt.Printf("processIncomingEmails: Failed to insert email %s into DB: %v\n", email.ID, err)
 			continue
 		}
+
+		admin.IncrementCounter("total_inbox", 1)
 
 		// // Mark the raw email as processed
 		// _, err = config.DB.Exec(`
@@ -2487,4 +2619,343 @@ func extractS3KeyFromURL(url, bucket string) (string, error) {
 		return "", fmt.Errorf("URL does not match bucket prefix")
 	}
 	return strings.TrimPrefix(url, prefix), nil
+}
+
+// GetUserSentEmailsHandler returns the current user's sent emails
+func GetUserSentEmailsHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+
+	// Pagination
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	// Search filter
+	search := c.QueryParam("search")
+
+	// Build query
+	var args []interface{}
+	whereClause := "user_id = ?"
+	args = append(args, userID)
+
+	if search != "" {
+		whereClause += " AND (to_email LIKE ? OR subject LIKE ?)"
+		searchPattern := "%" + search + "%"
+		args = append(args, searchPattern, searchPattern)
+	}
+
+	// Get total count
+	var total int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM sent_emails WHERE %s", whereClause)
+	err := config.DB.Get(&total, countQuery, args...)
+	if err != nil {
+		fmt.Println("Error counting sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Get sent emails
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`
+		SELECT id, user_id, from_email, to_email, subject, body_preview, status, sent_at, created_at,
+		       CASE WHEN attachments IS NOT NULL AND attachments != '' AND attachments != '[]' THEN 1 ELSE 0 END as has_attachments
+		FROM sent_emails
+		WHERE %s
+		ORDER BY COALESCE(sent_at, created_at) DESC
+		LIMIT ? OFFSET ?
+	`, whereClause)
+
+	type SentEmailRow struct {
+		ID             int64      `db:"id"`
+		UserID         int64      `db:"user_id"`
+		FromEmail      string     `db:"from_email"`
+		ToEmail        string     `db:"to_email"`
+		Subject        string     `db:"subject"`
+		BodyPreview    *string    `db:"body_preview"`
+		Status         string     `db:"status"`
+		SentAt         *time.Time `db:"sent_at"`
+		CreatedAt      time.Time  `db:"created_at"`
+		HasAttachments int        `db:"has_attachments"`
+	}
+
+	var emails []SentEmailRow
+	err = config.DB.Select(&emails, query, args...)
+	if err != nil {
+		fmt.Println("Error fetching sent emails:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Build response
+	data := make([]SentEmail, 0)
+	for _, e := range emails {
+		bodyPreview := ""
+		if e.BodyPreview != nil {
+			bodyPreview = *e.BodyPreview
+		}
+		data = append(data, SentEmail{
+			ID:             utils.EncodeID(int(e.ID)),
+			FromEmail:      e.FromEmail,
+			ToEmail:        e.ToEmail,
+			Subject:        e.Subject,
+			BodyPreview:    bodyPreview,
+			Status:         e.Status,
+			SentAt:         e.SentAt,
+			CreatedAt:      e.CreatedAt,
+			HasAttachments: e.HasAttachments == 1,
+		})
+	}
+
+	totalPages := (total + limit - 1) / limit
+
+	return c.JSON(http.StatusOK, UserSentEmailsResponse{
+		Data: data,
+		Pagination: PaginationResponse{
+			Page:       page,
+			Limit:      limit,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	})
+}
+
+// GetUserSentEmailDetailHandler returns a single sent email detail for the authenticated user
+// GET /email/sent/detail/:id
+func GetUserSentEmailDetailHandler(c echo.Context) error {
+	userID := c.Get("user_id").(int64)
+
+	// Decode email ID
+	emailIDParam := c.Param("id")
+	emailID, err := utils.DecodeID(emailIDParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid email ID",
+		})
+	}
+
+	// Get sent email from database (only if belongs to user)
+	type SentEmailDetail struct {
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		FromEmail   string         `db:"from_email"`
+		ToEmail     string         `db:"to_email"`
+		Subject     string         `db:"subject"`
+		BodyPreview sql.NullString `db:"body_preview"`
+		Body        sql.NullString `db:"body"`
+		Attachments sql.NullString `db:"attachments"`
+		Status      string         `db:"status"`
+		SentAt      sql.NullTime   `db:"sent_at"`
+		CreatedAt   time.Time      `db:"created_at"`
+	}
+
+	var email SentEmailDetail
+	err = config.DB.Get(&email, `
+		SELECT id, user_id, from_email, to_email, subject, body_preview, body,
+		       attachments, status, sent_at, created_at
+		FROM sent_emails
+		WHERE id = ? AND user_id = ?
+	`, emailID, userID)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Email not found",
+			})
+		}
+		fmt.Println("Error fetching sent email detail:", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Internal server error",
+		})
+	}
+
+	// Build response
+	bodyPreview := ""
+	if email.BodyPreview.Valid {
+		bodyPreview = email.BodyPreview.String
+	}
+	body := ""
+	if email.Body.Valid {
+		body = email.Body.String
+	}
+	attachments := ""
+	if email.Attachments.Valid {
+		attachments = email.Attachments.String
+	}
+	var sentAt *time.Time
+	if email.SentAt.Valid {
+		sentAt = &email.SentAt.Time
+	}
+
+	hasAttachments := attachments != "" && attachments != "[]"
+
+	response := map[string]interface{}{
+		"id":              utils.EncodeID(int(email.ID)),
+		"from":            email.FromEmail,
+		"to":              email.ToEmail,
+		"subject":         email.Subject,
+		"body_preview":    bodyPreview,
+		"body":            body,
+		"attachments":     attachments,
+		"has_attachments": hasAttachments,
+		"status":          email.Status,
+		"sent_at":         sentAt,
+		"created_at":      email.CreatedAt,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// SaveSentEmail saves a sent email to the sent_emails table
+func SaveSentEmail(userID int64, fromEmail, toEmail, subject, body string, attachments []string, provider, providerMsgID, status string) error {
+	// Create preview
+	bodyPreview := body
+	if len(bodyPreview) > 500 {
+		bodyPreview = bodyPreview[:500]
+	}
+
+	// Convert attachments to JSON
+	var attachmentsJSON *string
+	if len(attachments) > 0 {
+		jsonBytes, err := json.Marshal(attachments)
+		if err == nil {
+			str := string(jsonBytes)
+			attachmentsJSON = &str
+		}
+	}
+
+	_, err := config.DB.Exec(`
+		INSERT INTO sent_emails (user_id, from_email, to_email, subject, body_preview, body, attachments, provider, provider_message_id, status, sent_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+	`, userID, fromEmail, toEmail, subject, bodyPreview, body, attachmentsJSON, provider, providerMsgID, status)
+
+	if err == nil {
+		admin.IncrementCounter("total_sent", 1)
+	}
+
+	return err
+}
+
+// Add timeout-enabled helper functions
+func getUserEmailWithTimeout(userID int64) (string, error) {
+	var emailUser string
+	// Temporarily increased timeout to 15 seconds while investigating the issue
+	err := config.GetWithTimeout(&emailUser, `
+        SELECT email 
+        FROM users 
+        WHERE id = ? LIMIT 1`, 15*time.Second, userID)
+	if err != nil {
+		fmt.Printf("Failed to fetch user email for userID %d: %v\n", userID, err)
+
+		// Additional debugging: Check if it's a timeout or other error
+		if err.Error() == "context deadline exceeded" {
+			fmt.Printf("DATABASE TIMEOUT: getUserEmail for userID %d took longer than 15 seconds\n", userID)
+
+			// Try to get database health info for debugging
+			if healthInfo, healthErr := config.DatabaseHealthCheck(); healthErr == nil {
+				fmt.Printf("Database health during timeout: %+v\n", healthInfo)
+			}
+		}
+		return "", err
+	}
+	return emailUser, nil
+}
+
+func updateLastLoginWithTimeout(userID int64) error {
+	// Update the user's last login time with timeout
+	_, err := config.ExecuteWithTimeout("UPDATE users SET last_login = ? WHERE id = ?", 5*time.Second, time.Now(), userID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateIsReadWithTimeout(emailID string) error {
+	_, err := config.ExecuteWithTimeout(`
+		UPDATE emails 
+		SET is_read = TRUE
+		WHERE id = ?`, 5*time.Second, emailID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateIsReadAdminWithTimeout(emailID string) error {
+	_, err := config.ExecuteWithTimeout(`
+		UPDATE emails
+		SET is_read_admin = TRUE
+		WHERE id = ?`, 5*time.Second, emailID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateLimitSentEmailsWithTimeout(userID int64) error {
+	_, err := config.ExecuteWithTimeout(`
+        UPDATE users
+        SET sent_emails = sent_emails + 1
+        WHERE id = ?`, 5*time.Second, userID)
+	return err
+}
+
+func GetEmailQuotaWithTimeout(userID int64) (*EmailQuota, error) {
+	var u user.User
+	err := config.GetWithTimeout(&u, `
+        SELECT sent_emails, last_email_time
+        FROM users
+        WHERE id = ?`, 5*time.Second, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrowMidnight := todayMidnight.Add(24 * time.Hour)
+
+	// Reset at midnight: if no last_email_time or it's from a previous day
+	if u.LastEmailTime == nil || u.LastEmailTime.Before(todayMidnight) {
+		_, err := config.ExecuteWithTimeout(`
+            UPDATE users
+            SET sent_emails = 0,
+                last_email_time = NOW()
+            WHERE id = ?`, 5*time.Second, userID)
+		if err != nil {
+			return nil, err
+		}
+		return &EmailQuota{Sent: 0, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
+	}
+
+	return &EmailQuota{Sent: u.SentEmails, Limit: maxDailyEmails, ResetsAt: &tomorrowMidnight}, nil
+}
+
+func CheckEmailLimitWithTimeout(userID int64) error {
+	quota, err := GetEmailQuotaWithTimeout(userID)
+	if err != nil {
+		return err
+	}
+	if quota.Sent >= quota.Limit {
+		return errors.New("daily email limit exceeded")
+	}
+	return nil
+}
+
+// DatabaseHealthCheckHandler provides database health status
+func DatabaseHealthCheckHandler(c echo.Context) error {
+	healthInfo, err := config.DatabaseHealthCheck()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"status": "unhealthy",
+			"error":  err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, healthInfo)
 }

@@ -1,10 +1,12 @@
 package middleware
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/Triaksa-Space/be-mail-platform/config"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
@@ -50,9 +52,27 @@ func JWTMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		// Set user claims in the context for downstream handlers
-		c.Set("user_id", int64(claims["user_id"].(float64))) // Assuming `user_id` is an integer claim
+		userID := int64(claims["user_id"].(float64))
+		c.Set("user_id", userID)
 		c.Set("email", claims["email"].(string))
 		c.Set("role_id", int64(claims["role_id"].(float64)))
+
+		// Validate token_version against the database
+		if tokenVersionClaim, ok := claims["token_version"]; ok {
+			claimVersion := int64(tokenVersionClaim.(float64))
+			var dbVersion int64
+			err := config.DB.QueryRow("SELECT token_version FROM users WHERE id = ?", userID).Scan(&dbVersion)
+			if err != nil {
+				if err == sql.ErrNoRows {
+					return c.JSON(http.StatusUnauthorized, map[string]string{"error": "User not found."})
+				}
+				fmt.Println("Error checking token version:", err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
+			}
+			if claimVersion != dbVersion {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Session revoked. Please login again."})
+			}
+		}
 
 		return next(c)
 	}

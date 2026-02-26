@@ -18,6 +18,7 @@
 10. [Configuration](#configuration)
 11. [Deployment](#deployment)
 12. [Troubleshooting](#troubleshooting)
+13. [QA Testing](#qa-testing)
 
 ---
 
@@ -1357,6 +1358,14 @@ View logs:
 ```bash
 pm2 logs go-server --lines 50
 ```
+
+---
+
+## QA Testing
+
+Manual QA test cases are documented in:
+
+- [QA-Test-Scenario.md](./QA-Test-Scenario.md)
 
 ---
 
