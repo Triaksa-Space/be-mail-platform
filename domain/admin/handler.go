@@ -72,17 +72,17 @@ func GetOverviewHandler(c echo.Context) error {
 
 	// Get recent inbox emails with full details
 	type InboxRow struct {
-		ID             int64          `db:"id"`
-		UserID         int64          `db:"user_id"`
-		UserEmail      string         `db:"user_email"`
-		SenderEmail    string         `db:"sender_email"`
-		SenderName     string         `db:"sender_name"`
-		Subject        sql.NullString `db:"subject"`
-		Preview        sql.NullString `db:"preview"`
-		Body           sql.NullString `db:"body"`
-		IsRead         bool           `db:"is_read"`
-		Attachments    sql.NullString `db:"attachments"`
-		Timestamp      time.Time      `db:"timestamp"`
+		ID          int64          `db:"id"`
+		UserID      int64          `db:"user_id"`
+		UserEmail   string         `db:"user_email"`
+		SenderEmail string         `db:"sender_email"`
+		SenderName  string         `db:"sender_name"`
+		Subject     sql.NullString `db:"subject"`
+		Preview     sql.NullString `db:"preview"`
+		Body        sql.NullString `db:"body"`
+		IsRead      bool           `db:"is_read"`
+		Attachments sql.NullString `db:"attachments"`
+		Timestamp   time.Time      `db:"timestamp"`
 	}
 	var inboxRows []InboxRow
 	err = config.DB.Select(&inboxRows, `
@@ -91,7 +91,7 @@ func GetOverviewHandler(c echo.Context) error {
 		       e.is_read_admin AS is_read, e.attachments, e.timestamp
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
-		ORDER BY e.created_at DESC
+		ORDER BY e.timestamp  DESC
 		LIMIT 10
 	`)
 	if err != nil {
@@ -275,7 +275,7 @@ func GetAdminInboxHandler(c echo.Context) error {
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
 		WHERE %s
-		ORDER BY e.created_at DESC
+		ORDER BY e.timestamp  DESC
 		LIMIT ? OFFSET ?
 	`, whereClause)
 
