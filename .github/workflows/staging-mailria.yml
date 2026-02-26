@@ -25,7 +25,7 @@ jobs:
 
       - name: Build & push image
         run: |
-          IMAGE_URI=888577043011.dkr.ecr.ap-southeast-1.amazonaws.com/gamemarket:prod-mailria-be-latest
+          IMAGE_URI=888577043011.dkr.ecr.ap-southeast-1.amazonaws.com/gamemarket:staging-mailria-be-latest
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
 
