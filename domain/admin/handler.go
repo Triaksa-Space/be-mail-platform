@@ -749,13 +749,7 @@ func UpdatePermissionsHandler(c echo.Context) error {
 		})
 	}
 
-	// Can't modify SuperAdmin or User permissions
-	if roleID == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error":   "forbidden",
-			"message": "Cannot modify SuperAdmin permissions",
-		})
-	}
+	// Can't modify User permissions
 	if roleID == 1 {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error":   "forbidden",

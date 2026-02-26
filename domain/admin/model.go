@@ -224,7 +224,6 @@ type PermissionUpdate struct {
 
 // Role name mapping
 var RoleNames = map[int]string{
-	0: "SuperAdmin",
 	1: "User",
 	2: "Admin",
 }

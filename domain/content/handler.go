@@ -62,32 +62,28 @@ func UpdateContentHandler(c echo.Context) error {
 	}
 
 	userID := c.Get("user_id").(int64)
-	roleID := c.Get("role_id").(int64)
 
-	// Check permission based on key (SuperAdmin bypasses)
-	if roleID != 0 {
-		// Map content key to permission
-		permissionMap := map[string]string{
-			"terms":   "terms_of_services",
-			"privacy": "privacy_policy",
-		}
+	// Check permission based on key
+	permissionMap := map[string]string{
+		"terms":   "terms_of_services",
+		"privacy": "privacy_policy",
+	}
 
-		requiredPermission := permissionMap[key]
-		if requiredPermission != "" {
-			var hasPermission bool
-			err := config.DB.Get(&hasPermission, `
-				SELECT EXISTS(
-					SELECT 1 FROM admin_permissions
-					WHERE user_id = ? AND permission_key = ?
-				)
-			`, userID, requiredPermission)
+	requiredPermission := permissionMap[key]
+	if requiredPermission != "" {
+		var hasPermission bool
+		err := config.DB.Get(&hasPermission, `
+			SELECT EXISTS(
+				SELECT 1 FROM admin_permissions
+				WHERE user_id = ? AND permission_key = ?
+			)
+		`, userID, requiredPermission)
 
-			if err != nil || !hasPermission {
-				return c.JSON(http.StatusForbidden, map[string]string{
-					"error":   "forbidden",
-					"message": "You don't have permission to edit this content",
-				})
-			}
+		if err != nil || !hasPermission {
+			return c.JSON(http.StatusForbidden, map[string]string{
+				"error":   "forbidden",
+				"message": "You don't have permission to edit this content",
+			})
 		}
 	}
 
