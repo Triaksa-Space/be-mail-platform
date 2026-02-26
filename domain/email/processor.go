@@ -45,6 +45,7 @@ type IncomingEmail struct {
 	EmailDate   time.Time `db:"email_date"`
 	CreatedAt   time.Time `db:"created_at"`
 	Processed   bool      `db:"processed"`
+	RetryCount  int       `db:"retry_count"`
 }
 
 // ProcessResult holds the result of processing an email
@@ -81,12 +82,12 @@ func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
 	// Fetch batch of unprocessed emails
 	var pendingEmails []IncomingEmail
 	err := config.DB.Select(&pendingEmails, `
-		SELECT id, email_send_to, message_id, email_data, email_date, created_at, processed
+		SELECT id, email_send_to, message_id, email_data, email_date, created_at, processed, retry_count
 		FROM incoming_emails
-		WHERE processed = FALSE
+		WHERE processed = FALSE AND retry_count < ?
 		ORDER BY created_at ASC
 		LIMIT ?
-	`, cfg.BatchSize)
+	`, cfg.MaxRetries, cfg.BatchSize)
 
 	if err != nil {
 		log.Error("Failed to fetch pending emails", err)
@@ -357,16 +358,15 @@ func markEmailProcessed(emailID int64) {
 	}
 }
 
-// markEmailFailed increments retry count or marks as failed
+// markEmailFailed increments retry_count. Once it reaches MaxRetries the
+// fetch query excludes the row, so it is never retried again.
 func markEmailFailed(emailID int64) {
-	// For now, just mark as processed to avoid infinite retries
-	// TODO: Add retry_count column for proper retry logic
 	_, err := config.DB.Exec(`
-		UPDATE incoming_emails SET processed = TRUE WHERE id = ?
+		UPDATE incoming_emails SET retry_count = retry_count + 1 WHERE id = ?
 	`, emailID)
 	if err != nil {
 		log := logger.Get().WithComponent("email_processor")
-		log.Warn("Failed to mark email as failed",
+		log.Warn("Failed to increment retry count",
 			logger.EmailID(emailID),
 			logger.Err(err),
 		)

@@ -91,7 +91,7 @@ func GetOverviewHandler(c echo.Context) error {
 		       e.is_read_admin AS is_read, e.attachments, e.timestamp
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
-		ORDER BY e.timestamp DESC
+		ORDER BY e.created_at DESC
 		LIMIT 10
 	`)
 	if err != nil {
@@ -275,7 +275,7 @@ func GetAdminInboxHandler(c echo.Context) error {
 		FROM emails e
 		JOIN users u ON e.user_id = u.id
 		WHERE %s
-		ORDER BY e.timestamp DESC
+		ORDER BY e.created_at DESC
 		LIMIT ? OFFSET ?
 	`, whereClause)
 
