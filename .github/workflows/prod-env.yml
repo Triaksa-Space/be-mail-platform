@@ -3,7 +3,7 @@ name: PROD .env to EC2
 on:
   push:
     branches:
-      - a
+      - main
 
 jobs:
   push-env:
