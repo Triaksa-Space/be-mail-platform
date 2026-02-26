@@ -14,11 +14,6 @@ func PermissionMiddleware() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			roleID := c.Get("role_id").(int64)
 
-			// SuperAdmin bypasses all checks
-			if roleID == 0 {
-				return next(c)
-			}
-
 			method := c.Request().Method
 			path := c.Path() // e.g., "/user/:id"
 
@@ -54,11 +49,6 @@ func PermissionMiddleware() echo.MiddlewareFunc {
 
 // CheckPermission is a helper function to check permission programmatically
 func CheckPermission(roleID int64, method, path string) bool {
-	// SuperAdmin bypasses all checks
-	if roleID == 0 {
-		return true
-	}
-
 	var hasPermission bool
 	err := config.DB.Get(&hasPermission, `
 		SELECT EXISTS(
@@ -82,7 +72,6 @@ func CheckPermission(roleID int64, method, path string) bool {
 
 // AdminPermissionMiddleware checks if an admin user has the required permission
 // This uses the admin_permissions table for per-user permission control
-// SuperAdmin (role_id=0) bypasses all checks
 // Regular users (role_id=1) are denied
 // Admin users (role_id=2) are checked against admin_permissions table
 func AdminPermissionMiddleware(requiredPermission string) echo.MiddlewareFunc {
@@ -90,11 +79,6 @@ func AdminPermissionMiddleware(requiredPermission string) echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			roleID := c.Get("role_id").(int64)
 			userID := c.Get("user_id").(int64)
-
-			// SuperAdmin bypasses all permission checks
-			if roleID == 0 {
-				return next(c)
-			}
 
 			// Regular users don't have admin permissions
 			if roleID == 1 {

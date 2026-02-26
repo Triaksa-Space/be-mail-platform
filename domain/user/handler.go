@@ -411,9 +411,16 @@ func CreateUserAdminHandler(c echo.Context) error {
 		))
 	}
 
-	userName, err := getUserSuperAdminByID(userID)
+	if !admin.HasPermission(userID, "roles_permissions") {
+		return apperrors.RespondWithError(c, apperrors.NewForbidden(
+			apperrors.ErrCodeForbidden,
+			"Access denied.",
+		))
+	}
+
+	userName, err := getUserAdminByID(userID)
 	if err != nil {
-		log.Error("Failed to verify super admin", err)
+		log.Error("Failed to get admin user", err)
 		return apperrors.RespondWithError(c, apperrors.NewForbidden(
 			apperrors.ErrCodeForbidden,
 			"Access denied.",
@@ -460,15 +467,6 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 		))
 	}
 
-	// userName, err := getUserSuperAdminByID(userID)
-	// if err != nil {
-	// 	log.Error("Failed to verify super admin", err)
-	// 	return apperrors.RespondWithError(c, apperrors.NewForbidden(
-	// 		apperrors.ErrCodeForbidden,
-	// 		"Access denied",
-	// 	))
-	// }
-
 	hashedPassword, err := utils.HashPassword(req.Password)
 	if err != nil {
 		// log.Error("Failed to hash password", err)
@@ -479,12 +477,21 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 		))
 	}
 
-	_, err = config.DB.Exec(
+	tx, txErr := config.DB.Begin()
+	if txErr != nil {
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error.",
+			txErr,
+		))
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(
 		"INSERT INTO users (email, password, role_id, created_at, updated_at, created_by, updated_by, created_by_name, updated_by_name) VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)",
-		req.Username, hashedPassword, 0, 0, 0, "", "",
+		req.Username, hashedPassword, 2, 0, 0, "", "",
 	)
 	if err != nil {
-		// log.Error("Failed to create admin user", err, logger.Email(req.Username))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
 			apperrors.ErrCodeDatabaseError,
 			"Failed to create user.",
@@ -492,7 +499,24 @@ func CreateInitUserAdminHandler(c echo.Context) error {
 		))
 	}
 
-	// log.Info("Admin user created successfully", logger.Email(req.Username))
+	newUserID, _ := result.LastInsertId()
+
+	allPermissions := []string{
+		"overview", "user_list", "create_single", "create_bulk",
+		"all_inbox", "all_sent", "terms_of_services", "privacy_policy", "roles_permissions",
+	}
+	for _, perm := range allPermissions {
+		tx.Exec(`INSERT INTO admin_permissions (user_id, permission_key, created_at) VALUES (?, ?, NOW())`, newUserID, perm)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error.",
+			err,
+		))
+	}
+
 	return c.JSON(http.StatusCreated, map[string]string{"message": "User created successfully."})
 }
 
@@ -1049,15 +1073,6 @@ func GetUserMeHandler(c echo.Context) error {
 		response["permissions"] = permissions
 	}
 
-	// For superadmin (role_id = 0), return all permissions
-	if user.RoleID == 0 {
-		response["permissions"] = []string{
-			"overview", "user_list", "create_single", "create_bulk",
-			"all_inbox", "all_sent", "terms_of_services", "privacy_policy",
-			"roles_permissions",
-		}
-	}
-
 	return c.JSON(http.StatusOK, response)
 }
 
@@ -1218,32 +1233,12 @@ func updateLastLogin(userID int64) error {
 	return nil
 }
 
-func getUserSuperAdminByID(userID int64) (string, error) {
-	var user string
-	query := `
-        SELECT email
-        FROM users
-        WHERE id = ? AND role_id = 0
-    `
-
-	// Execute the query
-	err := config.DB.Get(&user, query, userID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", err
-		}
-		return "", err
-	}
-
-	return user, nil
-}
-
 func getUserAdminByID(userID int64) (string, error) {
 	var user string
 	query := `
         SELECT email
         FROM users
-        WHERE id = ? AND (role_id = 2 OR role_id = 0) limit 1
+        WHERE id = ? AND role_id = 2 LIMIT 1
     `
 
 	// Execute the query

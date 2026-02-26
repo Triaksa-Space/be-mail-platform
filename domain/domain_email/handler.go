@@ -75,12 +75,12 @@ func UpdateStagingDomainsHandler(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	result1, err := tx.Exec("UPDATE domains SET domain = ? WHERE id = ?", "staging.mailria.com", 1)
+	result1, err := tx.Exec("UPDATE domains SET domain = ? WHERE id = ?", "mailria.com", 3)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update domain id 1"})
 	}
 
-	result2, err := tx.Exec("UPDATE domains SET domain = ? WHERE id = ?", "staging.mailsaja.com", 2)
+	result2, err := tx.Exec("UPDATE domains SET domain = ? WHERE id = ?", "mailsaja.com", 4)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update domain id 2"})
 	}
