@@ -20,3 +20,5 @@ jobs:
             cat > ~/app/.env << 'EOF'
             ${{ secrets.ENV_FILE_PROD }}
             EOF
+            cd ~/app
+            docker compose restart
