@@ -48,5 +48,5 @@ USER appuser
 
 EXPOSE 8000
 
-ENTRYPOINT ["./entrypoint.sh"]
+#ENTRYPOINT ["./entrypoint.sh"]
 CMD ["server"]
