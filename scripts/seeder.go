@@ -66,7 +66,7 @@ func main() {
 			log.Fatalf("Failed to hash password for user %s: %v", user.Email, err)
 		}
 
-		_, err = config.DB.Exec(
+		result, err := config.DB.Exec(
 			"INSERT INTO users (email, password, role_id, last_login, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
 			user.Email, hashedPassword, user.RoleID, user.LastLogin, user.CreatedAt, user.CreatedAt,
 		)
@@ -74,6 +74,25 @@ func main() {
 			log.Fatalf("Failed to seed user %s: %v", user.Email, err)
 		}
 		log.Printf("Seeded user: %s", user.Email)
+
+		// If this is an admin user (role_id=2), insert all permissions
+		if user.RoleID == 2 {
+			newUserID, _ := result.LastInsertId()
+			allPermissions := []string{
+				"overview", "user_list", "create_single", "create_bulk",
+				"all_inbox", "all_sent", "terms_of_services", "privacy_policy", "roles_permissions",
+			}
+			for _, perm := range allPermissions {
+				_, err = config.DB.Exec(
+					"INSERT INTO admin_permissions (user_id, permission_key, created_at) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE created_at = created_at",
+					newUserID, perm,
+				)
+				if err != nil {
+					log.Printf("Warning: Failed to seed permission %s for user %s: %v", perm, user.Email, err)
+				}
+			}
+			log.Printf("Seeded permissions for admin user: %s", user.Email)
+		}
 	}
 
 	// Seed emails (5 additional users + 3 role-based users = 8 users total)
@@ -159,7 +178,7 @@ func generateUsers(count int) []user.User {
 		{
 			Email:     "superadmin@mailria.com",
 			Password:  "superadmin123",
-			RoleID:    0, // SuperAdmin
+			RoleID:    2, // Admin with all permissions
 			CreatedAt: parseDate("01 Jan 2024"),
 		},
 		{
