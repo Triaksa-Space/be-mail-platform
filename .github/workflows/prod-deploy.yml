@@ -3,7 +3,7 @@ name: PROD Mailria BE - Deploy
 on:
   push:
     branches:
-      - a
+      - main
 
 jobs:
   build-and-deploy:
