@@ -1,0 +1,22 @@
+name: PROD .env to EC2
+
+on:
+  push:
+    branches:
+      - a
+
+jobs:
+  push-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create .env on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST_PROD }}
+          username: ${{ secrets.EC2_USER_PROD }}
+          key: ${{ secrets.EC2_SSH_KEY_PROD }}
+          script: |
+            chmod 600 ~/app/.env
+            cat > ~/app/.env << 'EOF'
+            ${{ secrets.ENV_FILE_PROD }}
+            EOF
