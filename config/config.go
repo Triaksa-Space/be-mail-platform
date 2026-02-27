@@ -191,6 +191,16 @@ func DatabaseHealthCheck() (map[string]interface{}, error) {
 	return healthInfo, nil
 }
 
+// IncrementCounter increments a dashboard counter by delta (can be negative).
+func IncrementCounter(key string, delta int64) error {
+	_, err := DB.Exec(`
+		UPDATE dashboard_counters
+		SET counter_value = counter_value + ?, updated_at = NOW()
+		WHERE counter_key = ?
+	`, delta, key)
+	return err
+}
+
 // CloseDB closes the database connection gracefully
 func CloseDB() error {
 	if DB != nil {
