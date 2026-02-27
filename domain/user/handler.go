@@ -862,12 +862,25 @@ func BulkCreateUserHandler(c echo.Context) error {
 	emailBody := buildBulkCreateEmailBody(emailRows)
 
 	emailUser := viper.GetString("EMAIL_SUPPORT")
-	err = pkg.SendEmailViaResend(emailUser, req.SendTo, "[Mailria] - Bulk email list", emailBody, nil)
+	subject := "[Mailria] - Bulk email list"
+	err = pkg.SendEmailViaResend(emailUser, req.SendTo, subject, emailBody, nil)
 	if err != nil {
 		log.Error("Failed to send email", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
 		})
+	}
+
+	preview := emailBody
+	if len(preview) > 500 {
+		preview = preview[:500]
+	}
+	_, dbErr := config.DB.Exec(`
+		INSERT INTO sent_emails (user_id, from_email, to_email, subject, body_preview, body, provider, status, sent_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'resend', 'sent', NOW(), NOW())
+	`, userID, emailUser, req.SendTo, subject, preview, emailBody)
+	if dbErr != nil {
+		log.Error("Failed to log bulk create email to sent_emails", dbErr)
 	}
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
@@ -1505,12 +1518,25 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 		emailBody := buildBulkCreateEmailBody(createdUsers)
 
 		emailFrom := viper.GetString("EMAIL_SUPPORT")
-		err = pkg.SendEmailViaResend(emailFrom, req.SendTo, "Mailria Bulk User Creation", emailBody, nil)
+		subjectV2 := "Mailria Bulk User Creation"
+		err = pkg.SendEmailViaResend(emailFrom, req.SendTo, subjectV2, emailBody, nil)
 		if err != nil {
 			log.Warn("Failed to send credentials email", logger.Err(err))
 			response["email_error"] = "Failed to send credentials email"
 		} else {
 			response["credentials_sent_to"] = req.SendTo
+
+			previewV2 := emailBody
+			if len(previewV2) > 500 {
+				previewV2 = previewV2[:500]
+			}
+			_, dbErr := config.DB.Exec(`
+				INSERT INTO sent_emails (user_id, from_email, to_email, subject, body_preview, body, provider, status, sent_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, 'resend', 'sent', NOW(), NOW())
+			`, userID, emailFrom, req.SendTo, subjectV2, previewV2, emailBody)
+			if dbErr != nil {
+				log.Warn("Failed to log bulk create v2 email to sent_emails", logger.Err(dbErr))
+			}
 		}
 
 		// Don't include passwords in response if sent via email
