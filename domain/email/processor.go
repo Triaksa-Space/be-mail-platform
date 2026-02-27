@@ -21,17 +21,18 @@ var processMu sync.Mutex
 
 // ProcessConfig holds configuration for the email processor
 type ProcessConfig struct {
-	BatchSize   int // Number of emails to fetch per batch
-	WorkerCount int // Number of parallel workers
-	MaxRetries  int // Maximum retries for failed processing
+	BatchSize    int  // Number of emails to fetch per batch
+	WorkerCount  int  // Number of parallel workers
+	MaxRetries   int  // Maximum retries for failed processing
+	ForceProcess bool // Skip retry_count filter (for on-demand admin processing)
 }
 
 // DefaultProcessConfig returns default configuration
 func DefaultProcessConfig() ProcessConfig {
 	return ProcessConfig{
-		BatchSize:   50,  // Process 50 emails per batch
-		WorkerCount: 10,  // 10 parallel workers
-		MaxRetries:  3,   // Retry failed emails 3 times
+		BatchSize:   50, // Process 50 emails per batch
+		WorkerCount: 10, // 10 parallel workers
+		MaxRetries:  3,  // Retry failed emails 3 times
 	}
 }
 
@@ -55,9 +56,18 @@ type ProcessResult struct {
 }
 
 // ProcessAllPendingEmails processes all unprocessed emails from incoming_emails table
-// This is the main function called by the cron job
+// This is the main function called by the cron job (respects retry_count limit)
 func ProcessAllPendingEmails() error {
 	cfg := DefaultProcessConfig()
+	return ProcessAllPendingEmailsWithConfig(cfg)
+}
+
+// ForceProcessAllPendingEmails processes ALL pending emails regardless of retry_count.
+// Use this for on-demand triggers (e.g. admin inbox) so emails that the cron
+// already gave up on (retry_count >= 3) are still picked up immediately.
+func ForceProcessAllPendingEmails() error {
+	cfg := DefaultProcessConfig()
+	cfg.ForceProcess = true
 	return ProcessAllPendingEmailsWithConfig(cfg)
 }
 
@@ -78,15 +88,28 @@ func ProcessAllPendingEmailsWithConfig(cfg ProcessConfig) error {
 		logger.Int("workers", cfg.WorkerCount),
 	)
 
-	// Fetch batch of unprocessed emails
+	// Fetch batch of unprocessed emails.
+	// ForceProcess bypasses the retry_count limit so on-demand admin requests
+	// can still pick up emails that exhausted their cron retries.
 	var pendingEmails []IncomingEmail
-	err := config.DB.Select(&pendingEmails, `
-		SELECT id, email_send_to, message_id, email_data, email_date, created_at, processed, retry_count
-		FROM incoming_emails
-		WHERE processed = FALSE AND retry_count < ?
-		ORDER BY created_at ASC
-		LIMIT ?
-	`, cfg.MaxRetries, cfg.BatchSize)
+	var err error
+	if cfg.ForceProcess {
+		err = config.DB.Select(&pendingEmails, `
+			SELECT id, email_send_to, message_id, email_data, email_date, created_at, processed, retry_count
+			FROM incoming_emails
+			WHERE processed = FALSE
+			ORDER BY created_at ASC
+			LIMIT ?
+		`, cfg.BatchSize)
+	} else {
+		err = config.DB.Select(&pendingEmails, `
+			SELECT id, email_send_to, message_id, email_data, email_date, created_at, processed, retry_count
+			FROM incoming_emails
+			WHERE processed = FALSE AND retry_count < ?
+			ORDER BY created_at ASC
+			LIMIT ?
+		`, cfg.MaxRetries, cfg.BatchSize)
+	}
 
 	if err != nil {
 		log.Error("Failed to fetch pending emails", err)
