@@ -2,6 +2,8 @@ package email
 
 import (
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,11 +13,13 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/labstack/echo/v4"
 	"github.com/spf13/viper"
 )
 
 const retentionBatchSize = 1000
 const retentionDays = 100
+const retentionMaxBatchDelete = 500 // max rows to delete per API request
 
 // RunDataRetention hard-deletes emails older than 100 days from emails,
 // sent_emails, and incoming_emails tables. Emails aged exactly 100 days are
@@ -265,6 +269,252 @@ func deleteByIDs(log logger.Logger, table string, ids []int64) (int64, error) {
 	}
 
 	return affected, nil
+}
+
+// ListRetentionEmailsHandler returns paginated emails that are >= retentionDays old.
+// GET /admin/retention/emails?table=emails&page=1&limit=50
+func ListRetentionEmailsHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("retention_list")
+
+	tableParam := c.QueryParam("table")
+	if tableParam == "" {
+		tableParam = "emails"
+	}
+	allowedTables := map[string]bool{
+		"emails":          true,
+		"sent_emails":     true,
+		"incoming_emails": true,
+	}
+	if !allowedTables[tableParam] {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "table must be one of: emails, sent_emails, incoming_emails",
+		})
+	}
+
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	if limit < 1 || limit > 200 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
+
+	var total int
+	if err := config.DB.Get(&total, fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s WHERE created_at < NOW() - INTERVAL %d DAY",
+		tableParam, retentionDays,
+	)); err != nil {
+		log.Error("Failed to count retention emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to count"})
+	}
+
+	// Build column list per table using a safe alias
+	var selectSQL string
+	switch tableParam {
+	case "emails":
+		selectSQL = fmt.Sprintf(
+			"SELECT id, COALESCE(subject,'') AS subject, sender_email, created_at"+
+				" FROM emails WHERE created_at < NOW() - INTERVAL %d DAY"+
+				" ORDER BY id ASC LIMIT ? OFFSET ?", retentionDays)
+	case "sent_emails":
+		selectSQL = fmt.Sprintf(
+			"SELECT id, COALESCE(subject,'') AS subject, from_email AS sender_email, created_at"+
+				" FROM sent_emails WHERE created_at < NOW() - INTERVAL %d DAY"+
+				" ORDER BY id ASC LIMIT ? OFFSET ?", retentionDays)
+	case "incoming_emails":
+		selectSQL = fmt.Sprintf(
+			"SELECT id, '' AS subject, email_send_to AS sender_email, created_at"+
+				" FROM incoming_emails WHERE created_at < NOW() - INTERVAL %d DAY"+
+				" ORDER BY id ASC LIMIT ? OFFSET ?", retentionDays)
+	}
+
+	type retentionRow struct {
+		ID          int64     `db:"id"`
+		Subject     string    `db:"subject"`
+		SenderEmail string    `db:"sender_email"`
+		CreatedAt   time.Time `db:"created_at"`
+	}
+	var rows []retentionRow
+	if err := config.DB.Select(&rows, selectSQL, limit, offset); err != nil {
+		log.Error("Failed to list retention emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to list"})
+	}
+
+	type responseItem struct {
+		ID          int64     `json:"id"`
+		Subject     string    `json:"subject,omitempty"`
+		SenderEmail string    `json:"sender_email,omitempty"`
+		CreatedAt   time.Time `json:"created_at"`
+		AgeDays     int       `json:"age_days"`
+	}
+	now := time.Now()
+	items := make([]responseItem, len(rows))
+	for i, r := range rows {
+		items[i] = responseItem{
+			ID:          r.ID,
+			Subject:     r.Subject,
+			SenderEmail: r.SenderEmail,
+			CreatedAt:   r.CreatedAt,
+			AgeDays:     int(now.Sub(r.CreatedAt).Hours() / 24),
+		}
+	}
+
+	totalPages := (total + limit - 1) / limit
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"table": tableParam,
+		"data":  items,
+		"pagination": map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
+}
+
+// BatchDeleteRetentionEmailsHandler hard-deletes the oldest N expired emails.
+// DELETE /admin/retention/emails
+// Body: { "table": "emails", "limit": 100 }  — max 500 per request
+func BatchDeleteRetentionEmailsHandler(c echo.Context) error {
+	log := logger.Get().WithComponent("retention_batch_delete")
+
+	var req struct {
+		Table string `json:"table"`
+		Limit int    `json:"limit"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+
+	allowedTables := map[string]bool{
+		"emails":          true,
+		"sent_emails":     true,
+		"incoming_emails": true,
+	}
+	if !allowedTables[req.Table] {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "table must be one of: emails, sent_emails, incoming_emails",
+		})
+	}
+	if req.Limit < 1 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "limit must be >= 1"})
+	}
+	if req.Limit > retentionMaxBatchDelete {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("max limit is %d per request", retentionMaxBatchDelete),
+		})
+	}
+
+	// Fetch the oldest N eligible rows (+ attachments for S3 cleanup)
+	type fetchRow struct {
+		ID          int64  `db:"id"`
+		Attachments string `db:"attachments"`
+	}
+	var fetchSQL string
+	if req.Table == "emails" || req.Table == "sent_emails" {
+		fetchSQL = fmt.Sprintf(
+			"SELECT id, COALESCE(attachments,'') AS attachments FROM %s"+
+				" WHERE created_at < NOW() - INTERVAL %d DAY"+
+				" ORDER BY id ASC LIMIT ?",
+			req.Table, retentionDays)
+	} else {
+		fetchSQL = fmt.Sprintf(
+			"SELECT id, '' AS attachments FROM %s"+
+				" WHERE created_at < NOW() - INTERVAL %d DAY"+
+				" ORDER BY id ASC LIMIT ?",
+			req.Table, retentionDays)
+	}
+	var rows []fetchRow
+	if err := config.DB.Select(&rows, fetchSQL, req.Limit); err != nil {
+		log.Error("Failed to fetch rows for retention delete", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to fetch rows"})
+	}
+	if len(rows) == 0 {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"deleted": 0,
+			"table":   req.Table,
+		})
+	}
+
+	// Build IN clause from fetched IDs
+	placeholders := make([]string, len(rows))
+	args := make([]interface{}, len(rows))
+	for i, r := range rows {
+		placeholders[i] = "?"
+		args[i] = r.ID
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	// For emails and sent_emails: clean up S3 attachments before deleting rows
+	if req.Table == "emails" || req.Table == "sent_emails" {
+		sess, err := session.NewSession(&aws.Config{
+			Region: aws.String(viper.GetString("AWS_REGION")),
+		})
+		if err != nil {
+			log.Warn("Failed to create AWS session for S3 cleanup",
+				logger.String("error", err.Error()),
+			)
+		} else {
+			s3Client := s3.New(sess)
+			bucket := viper.GetString("AWS_S3_BUCKET")
+			for _, row := range rows {
+				if row.Attachments == "" || row.Attachments == "[]" || row.Attachments == "null" {
+					continue
+				}
+				deleteS3Attachments(log, s3Client, bucket, row.ID, row.Attachments)
+			}
+		}
+	}
+
+	// Delete by IDs (date guard ensures only truly old rows are removed)
+	deleteSQL := fmt.Sprintf(
+		"DELETE FROM %s WHERE id IN (%s) AND created_at < NOW() - INTERVAL %d DAY",
+		req.Table, inClause, retentionDays,
+	)
+	result, err := config.DB.Exec(deleteSQL, args...)
+	if err != nil {
+		log.Error("Failed to batch delete retention emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete"})
+	}
+	deleted, _ := result.RowsAffected()
+
+	// Update dashboard counters
+	if deleted > 0 {
+		switch req.Table {
+		case "emails":
+			if _, err := config.DB.Exec(`
+				UPDATE dashboard_counters
+				SET counter_value = GREATEST(counter_value - ?, 0), updated_at = NOW()
+				WHERE counter_key = 'total_inbox'
+			`, deleted); err != nil {
+				log.Warn("Failed to update total_inbox counter",
+					logger.String("error", err.Error()),
+				)
+			}
+		case "sent_emails":
+			if _, err := config.DB.Exec(`
+				UPDATE dashboard_counters
+				SET counter_value = GREATEST(counter_value - ?, 0), updated_at = NOW()
+				WHERE counter_key = 'total_sent'
+			`, deleted); err != nil {
+				log.Warn("Failed to update total_sent counter",
+					logger.String("error", err.Error()),
+				)
+			}
+		}
+	}
+
+	log.Info("Batch retention delete complete",
+		logger.String("table", req.Table),
+		logger.Int("limit", req.Limit),
+		logger.Int64("deleted", deleted),
+	)
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"deleted": deleted,
+		"table":   req.Table,
+	})
 }
 
 // deleteS3Attachments parses attachment URLs and deletes them from S3.

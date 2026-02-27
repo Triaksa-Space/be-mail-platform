@@ -103,6 +103,8 @@ func RegisterRoutes(e *echo.Echo) {
 	// Admin dashboard
 	adminGroup.GET("/overview", admin.GetOverviewHandler, middleware.AdminPermissionMiddleware("overview"))
 	adminGroup.POST("/process-emails", email.TriggerProcessEmailsHandler, middleware.AdminPermissionMiddleware("overview"))
+	adminGroup.GET("/retention/emails", email.ListRetentionEmailsHandler, middleware.AdminPermissionMiddleware("overview"))
+	adminGroup.DELETE("/retention/emails", email.BatchDeleteRetentionEmailsHandler, middleware.AdminPermissionMiddleware("overview"))
 	adminGroup.POST("/counters/reconcile", admin.ReconcileCountersHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("roles_permissions"))
 
 	// Admin inbox and sent views
