@@ -108,7 +108,7 @@ func retentionDeleteEmails(log logger.Logger, s3Client *s3.S3, bucket string) (i
 		err := config.DB.Select(&emails, `
 			SELECT id, COALESCE(attachments, '') AS attachments
 			FROM emails
-			WHERE created_at < NOW() - INTERVAL 101 DAY
+			WHERE timestamp < NOW() - INTERVAL 101 DAY
 			ORDER BY id ASC
 			LIMIT ?
 		`, retentionBatchSize)
@@ -165,7 +165,7 @@ func retentionDeleteSentEmails(log logger.Logger, s3Client *s3.S3, bucket string
 		err := config.DB.Select(&emails, `
 			SELECT id, attachments
 			FROM sent_emails
-			WHERE created_at < NOW() - INTERVAL 101 DAY
+			WHERE COALESCE(sent_at, created_at) < NOW() - INTERVAL 101 DAY
 			ORDER BY id ASC
 			LIMIT ?
 		`, retentionBatchSize)
@@ -301,40 +301,50 @@ func ListRetentionEmailsHandler(c echo.Context) error {
 	}
 	offset := (page - 1) * limit
 
-	var total int
-	if err := config.DB.Get(&total, fmt.Sprintf(
-		"SELECT COUNT(*) FROM %s WHERE created_at < NOW() - INTERVAL %d DAY",
-		tableParam, retentionDays,
-	)); err != nil {
-		log.Error("Failed to count retention emails", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to count"})
-	}
-
-	// Build column list per table using a safe alias
-	var selectSQL string
+	// COUNT and SELECT use the real email-age column per table:
+	//   emails        → timestamp      (when the email was actually received)
+	//   sent_emails   → sent_at        (when the email was actually sent; fallback created_at)
+	//   incoming_emails → created_at
+	var countSQL, selectSQL string
 	switch tableParam {
 	case "emails":
+		countSQL = fmt.Sprintf(
+			"SELECT COUNT(*) FROM emails WHERE timestamp < NOW() - INTERVAL %d DAY",
+			retentionDays)
 		selectSQL = fmt.Sprintf(
-			"SELECT id, COALESCE(subject,'') AS subject, sender_email, created_at"+
-				" FROM emails WHERE created_at < NOW() - INTERVAL %d DAY"+
-				" ORDER BY id ASC LIMIT ? OFFSET ?", retentionDays)
+			"SELECT id, COALESCE(subject,'') AS subject, sender_email, timestamp AS email_time"+
+				" FROM emails WHERE timestamp < NOW() - INTERVAL %d DAY"+
+				" ORDER BY timestamp ASC LIMIT ? OFFSET ?", retentionDays)
 	case "sent_emails":
+		countSQL = fmt.Sprintf(
+			"SELECT COUNT(*) FROM sent_emails WHERE COALESCE(sent_at, created_at) < NOW() - INTERVAL %d DAY",
+			retentionDays)
 		selectSQL = fmt.Sprintf(
-			"SELECT id, COALESCE(subject,'') AS subject, from_email AS sender_email, created_at"+
-				" FROM sent_emails WHERE created_at < NOW() - INTERVAL %d DAY"+
-				" ORDER BY id ASC LIMIT ? OFFSET ?", retentionDays)
+			"SELECT id, COALESCE(subject,'') AS subject, from_email AS sender_email,"+
+				" COALESCE(sent_at, created_at) AS email_time"+
+				" FROM sent_emails WHERE COALESCE(sent_at, created_at) < NOW() - INTERVAL %d DAY"+
+				" ORDER BY email_time ASC LIMIT ? OFFSET ?", retentionDays)
 	case "incoming_emails":
+		countSQL = fmt.Sprintf(
+			"SELECT COUNT(*) FROM incoming_emails WHERE created_at < NOW() - INTERVAL %d DAY",
+			retentionDays)
 		selectSQL = fmt.Sprintf(
-			"SELECT id, '' AS subject, email_send_to AS sender_email, created_at"+
+			"SELECT id, '' AS subject, email_send_to AS sender_email, created_at AS email_time"+
 				" FROM incoming_emails WHERE created_at < NOW() - INTERVAL %d DAY"+
-				" ORDER BY id ASC LIMIT ? OFFSET ?", retentionDays)
+				" ORDER BY created_at ASC LIMIT ? OFFSET ?", retentionDays)
+	}
+
+	var total int
+	if err := config.DB.Get(&total, countSQL); err != nil {
+		log.Error("Failed to count retention emails", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to count"})
 	}
 
 	type retentionRow struct {
 		ID          int64     `db:"id"`
 		Subject     string    `db:"subject"`
 		SenderEmail string    `db:"sender_email"`
-		CreatedAt   time.Time `db:"created_at"`
+		EmailTime   time.Time `db:"email_time"`
 	}
 	var rows []retentionRow
 	if err := config.DB.Select(&rows, selectSQL, limit, offset); err != nil {
@@ -346,7 +356,7 @@ func ListRetentionEmailsHandler(c echo.Context) error {
 		ID          int64     `json:"id"`
 		Subject     string    `json:"subject,omitempty"`
 		SenderEmail string    `json:"sender_email,omitempty"`
-		CreatedAt   time.Time `json:"created_at"`
+		EmailTime   time.Time `json:"email_time"`
 		AgeDays     int       `json:"age_days"`
 	}
 	now := time.Now()
@@ -356,8 +366,8 @@ func ListRetentionEmailsHandler(c echo.Context) error {
 			ID:          r.ID,
 			Subject:     r.Subject,
 			SenderEmail: r.SenderEmail,
-			CreatedAt:   r.CreatedAt,
-			AgeDays:     int(now.Sub(r.CreatedAt).Hours() / 24),
+			EmailTime:   r.EmailTime,
+			AgeDays:     int(now.Sub(r.EmailTime).Hours() / 24),
 		}
 	}
 
@@ -407,24 +417,29 @@ func BatchDeleteRetentionEmailsHandler(c echo.Context) error {
 		})
 	}
 
-	// Fetch the oldest N eligible rows (+ attachments for S3 cleanup)
+	// Fetch the oldest N eligible rows (+ attachments for S3 cleanup).
+	// Use the real email-age column per table (same logic as the list handler).
 	type fetchRow struct {
 		ID          int64  `db:"id"`
 		Attachments string `db:"attachments"`
 	}
 	var fetchSQL string
-	if req.Table == "emails" || req.Table == "sent_emails" {
+	switch req.Table {
+	case "emails":
 		fetchSQL = fmt.Sprintf(
-			"SELECT id, COALESCE(attachments,'') AS attachments FROM %s"+
-				" WHERE created_at < NOW() - INTERVAL %d DAY"+
-				" ORDER BY id ASC LIMIT ?",
-			req.Table, retentionDays)
-	} else {
+			"SELECT id, COALESCE(attachments,'') AS attachments FROM emails"+
+				" WHERE timestamp < NOW() - INTERVAL %d DAY"+
+				" ORDER BY timestamp ASC LIMIT ?", retentionDays)
+	case "sent_emails":
 		fetchSQL = fmt.Sprintf(
-			"SELECT id, '' AS attachments FROM %s"+
+			"SELECT id, COALESCE(attachments,'') AS attachments FROM sent_emails"+
+				" WHERE COALESCE(sent_at, created_at) < NOW() - INTERVAL %d DAY"+
+				" ORDER BY COALESCE(sent_at, created_at) ASC LIMIT ?", retentionDays)
+	case "incoming_emails":
+		fetchSQL = fmt.Sprintf(
+			"SELECT id, '' AS attachments FROM incoming_emails"+
 				" WHERE created_at < NOW() - INTERVAL %d DAY"+
-				" ORDER BY id ASC LIMIT ?",
-			req.Table, retentionDays)
+				" ORDER BY created_at ASC LIMIT ?", retentionDays)
 	}
 	var rows []fetchRow
 	if err := config.DB.Select(&rows, fetchSQL, req.Limit); err != nil {
@@ -468,10 +483,18 @@ func BatchDeleteRetentionEmailsHandler(c echo.Context) error {
 		}
 	}
 
-	// Delete by IDs (date guard ensures only truly old rows are removed)
-	deleteSQL := fmt.Sprintf(
-		"DELETE FROM %s WHERE id IN (%s) AND created_at < NOW() - INTERVAL %d DAY",
-		req.Table, inClause, retentionDays,
+	// Delete by IDs — date guard per table prevents accidentally deleting fresh rows
+	var dateGuard string
+	switch req.Table {
+	case "emails":
+		dateGuard = fmt.Sprintf("timestamp < NOW() - INTERVAL %d DAY", retentionDays)
+	case "sent_emails":
+		dateGuard = fmt.Sprintf("COALESCE(sent_at, created_at) < NOW() - INTERVAL %d DAY", retentionDays)
+	default:
+		dateGuard = fmt.Sprintf("created_at < NOW() - INTERVAL %d DAY", retentionDays)
+	}
+	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE id IN (%s) AND %s",
+		req.Table, inClause, dateGuard,
 	)
 	result, err := config.DB.Exec(deleteSQL, args...)
 	if err != nil {
