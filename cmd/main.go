@@ -123,8 +123,10 @@ func runServer() {
 	// Initialize dashboard counters from actual DB counts
 	initDashboardCounters(log)
 
-	// Wire ProcessAllPendingEmails into admin handler (avoids admin→email→user→admin cycle)
-	admin.ProcessPendingEmailsFn = email.ProcessAllPendingEmails
+	// Wire ForceProcessAllPendingEmails into admin handler (avoids admin→email→user→admin cycle).
+	// Force variant skips the retry_count filter so on-demand admin requests process
+	// emails that the cron already gave up on after 3 failures.
+	admin.ProcessPendingEmailsFn = email.ForceProcessAllPendingEmails
 
 	// Register routes
 	routes.RegisterRoutes(e)

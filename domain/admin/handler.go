@@ -210,19 +210,15 @@ func GetOverviewHandler(c echo.Context) error {
 
 // GetAdminInboxHandler returns all inbox emails for admin view
 func GetAdminInboxHandler(c echo.Context) error {
-	// Process any pending incoming emails before querying, same as ListEmailByIDHandler.
-	if ProcessPendingEmailsFn != nil {
-		if err := ProcessPendingEmailsFn(); err != nil {
-			logger.Get().WithComponent("admin_inbox").Warn("Failed to process pending emails", logger.Err(err))
-		}
-	}
-
-	// Pagination
+	// Pagination — FE sends page_size, fallback to limit for backwards compat
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	if page < 1 {
 		page = 1
 	}
-	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	limit, _ := strconv.Atoi(c.QueryParam("page_size"))
+	if limit < 1 {
+		limit, _ = strconv.Atoi(c.QueryParam("limit"))
+	}
 	if limit < 1 {
 		limit = 10
 	}
