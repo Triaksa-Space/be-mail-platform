@@ -123,6 +123,9 @@ func runServer() {
 	// Initialize dashboard counters from actual DB counts
 	initDashboardCounters(log)
 
+	// Wire ProcessAllPendingEmails into admin handler (avoids admin→email→user→admin cycle)
+	admin.ProcessPendingEmailsFn = email.ProcessAllPendingEmails
+
 	// Register routes
 	routes.RegisterRoutes(e)
 

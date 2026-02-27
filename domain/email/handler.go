@@ -18,7 +18,6 @@ import (
 	"unicode"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
-	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/apperrors"
@@ -186,7 +185,7 @@ func HandleEmailBounceHandler(c echo.Context) error {
 		})
 	}
 
-	admin.IncrementCounter("total_inbox", 1)
+	config.IncrementCounter("total_inbox", 1)
 
 	log.Info("Email bounce processed successfully", logger.String("email_id", payload.Data.EmailID))
 	return c.JSON(http.StatusOK, map[string]string{
@@ -528,7 +527,7 @@ func SendEmailHandler(c echo.Context) error {
 	if err != nil {
 		log.Warn("Email sent but failed to save to sent_emails", logger.Err(err))
 	} else {
-		admin.IncrementCounter("total_sent", 1)
+		config.IncrementCounter("total_sent", 1)
 	}
 
 	if err := updateLastLogin(userID); err != nil {
@@ -623,7 +622,7 @@ func SendEmailViaResendHandler(c echo.Context) error {
 		fmt.Println("Email sent but failed to save to sent_emails:", err)
 		// Don't return error since email was sent successfully
 	} else {
-		admin.IncrementCounter("total_sent", 1)
+		config.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login with timeout
@@ -745,7 +744,7 @@ func SendEmailSMTPHHandler(c echo.Context) error {
 	if err != nil {
 		fmt.Println("Email sent but failed to save to sent_emails:", err)
 	} else {
-		admin.IncrementCounter("total_sent", 1)
+		config.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login
@@ -867,7 +866,7 @@ func SendEmailSMTPHandler(c echo.Context) error {
 	if err != nil {
 		fmt.Println("Email sent but failed to save to sent_emails:", err)
 	} else {
-		admin.IncrementCounter("total_sent", 1)
+		config.IncrementCounter("total_sent", 1)
 	}
 
 	// Update last login
@@ -1665,7 +1664,7 @@ func DeleteEmailHandler(c echo.Context) error {
 
 	// Decrement inbox counter (sent emails are in sent_emails table, tracked separately)
 	if emailType == "inbox" {
-		admin.IncrementCounter("total_inbox", -1)
+		config.IncrementCounter("total_inbox", -1)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Email deleted successfully"})
@@ -2207,7 +2206,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 					continue
 				}
 
-				admin.IncrementCounter("total_inbox", 1)
+				config.IncrementCounter("total_inbox", 1)
 				stats.NewEmails++
 			}
 		}
@@ -2499,7 +2498,7 @@ func processIncomingEmails(userID int64, emailSendTo string) error {
 			continue
 		}
 
-		admin.IncrementCounter("total_inbox", 1)
+		config.IncrementCounter("total_inbox", 1)
 
 		// // Mark the raw email as processed
 		// _, err = config.DB.Exec(`
@@ -2836,7 +2835,7 @@ func SaveSentEmail(userID int64, fromEmail, toEmail, subject, body string, attac
 	`, userID, fromEmail, toEmail, subject, bodyPreview, body, attachmentsJSON, provider, providerMsgID, status)
 
 	if err == nil {
-		admin.IncrementCounter("total_sent", 1)
+		config.IncrementCounter("total_sent", 1)
 	}
 
 	return err

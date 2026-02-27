@@ -15,6 +15,10 @@ import (
 	"github.com/spf13/viper"
 )
 
+// ProcessPendingEmailsFn is set at startup (cmd/main.go) to avoid the import
+// cycle: admin → email → user → admin.
+var ProcessPendingEmailsFn func() error
+
 // GetDomainPrimary returns the primary domain from config (default: mailria.com)
 func GetDomainPrimary() string {
 	d := viper.GetString("DOMAIN_PRIMARY")
@@ -206,6 +210,13 @@ func GetOverviewHandler(c echo.Context) error {
 
 // GetAdminInboxHandler returns all inbox emails for admin view
 func GetAdminInboxHandler(c echo.Context) error {
+	// Process any pending incoming emails before querying, same as ListEmailByIDHandler.
+	if ProcessPendingEmailsFn != nil {
+		if err := ProcessPendingEmailsFn(); err != nil {
+			logger.Get().WithComponent("admin_inbox").Warn("Failed to process pending emails", logger.Err(err))
+		}
+	}
+
 	// Pagination
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	if page < 1 {

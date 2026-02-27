@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Triaksa-Space/be-mail-platform/config"
-	"github.com/Triaksa-Space/be-mail-platform/domain/admin"
 	"github.com/Triaksa-Space/be-mail-platform/pkg"
 	"github.com/Triaksa-Space/be-mail-platform/pkg/logger"
 	"github.com/jhillyerd/enmime"
@@ -278,7 +277,7 @@ func processOneEmail(log logger.Logger, workerID int, rawEmail IncomingEmail) Pr
 		return result
 	}
 
-	admin.IncrementCounter("total_inbox", 1)
+	config.IncrementCounter("total_inbox", 1)
 
 	// Delete from incoming_emails after successful processing
 	_, err = config.DB.Exec(`DELETE FROM incoming_emails WHERE id = ?`, rawEmail.ID)
@@ -340,7 +339,7 @@ func enforceEmailLimit(userID int64, maxEmails int) {
 			logger.UserID(userID),
 			logger.Int64("deleted_count", rowsDeleted),
 		)
-		admin.IncrementCounter("total_inbox", -rowsDeleted)
+		config.IncrementCounter("total_inbox", -rowsDeleted)
 	}
 }
 
