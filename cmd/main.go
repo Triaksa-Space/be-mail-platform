@@ -35,6 +35,10 @@ func main() {
 
 	// Initialize database
 	config.InitDB()
+
+	// Initialize Redis (for heartbeat / last active tracking)
+	config.InitRedis()
+
 	log.Info("Application initialized", logger.String("command", os.Args[1]))
 
 	switch os.Args[1] {
