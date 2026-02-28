@@ -8,6 +8,7 @@ import (
 	"github.com/Triaksa-Space/be-mail-platform/domain/email"
 	"github.com/Triaksa-Space/be-mail-platform/domain/health"
 	"github.com/Triaksa-Space/be-mail-platform/domain/password"
+	"github.com/Triaksa-Space/be-mail-platform/domain/presence"
 	"github.com/Triaksa-Space/be-mail-platform/domain/user"
 	"github.com/Triaksa-Space/be-mail-platform/middleware"
 
@@ -29,6 +30,9 @@ func RegisterRoutes(e *echo.Echo) {
 	e.POST("/token/refresh", auth.RefreshTokenHandler)
 	e.POST("/logout", auth.LogoutHandler, middleware.JWTMiddleware)
 	e.GET("/health", email.DatabaseHealthCheckHandler)
+
+	// Heartbeat — keeps last active timestamp fresh in Redis
+	e.POST("/heartbeat", presence.HeartbeatHandler, middleware.JWTMiddleware)
 
 	// Legacy login route (for backward compatibility) - uses same handler as /login
 	e.POST("/user/login", auth.LoginHandler)
