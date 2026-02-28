@@ -162,9 +162,13 @@ func ListAdminsHandler(c echo.Context) error {
 		permissions, _ := getAdminPermissions(admin.ID)
 
 		// Check if online (active in last 15 minutes)
+		// Prefer Redis heartbeat timestamp; fall back to DB last_login.
 		isOnline := false
 		var lastActiveAt *time.Time
-		if admin.LastLogin.Valid {
+		if redisTime := config.GetLastActive(admin.ID); redisTime != nil {
+			lastActiveAt = redisTime
+			isOnline = time.Since(*redisTime) < 15*time.Minute
+		} else if admin.LastLogin.Valid {
 			lastActiveAt = &admin.LastLogin.Time
 			isOnline = time.Since(admin.LastLogin.Time) < 15*time.Minute
 		}
