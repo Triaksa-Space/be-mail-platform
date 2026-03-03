@@ -81,7 +81,7 @@ func RegisterRoutes(e *echo.Echo) {
 	emailGroup.POST("/by_user/download/file", email.GetFileEmailToDownloadHandler)
 	emailGroup.GET("/by_user/:id", email.ListEmailByIDHandler, middleware.RoleMiddleware(adminRoles))
 	emailGroup.GET("/sent/by_user", email.SentEmailByIDHandler)
-	emailGroup.GET("/sent/by_user/:id", email.ListSentEmailsByUserIDHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("user_list")) // Admin: list sent emails by user (from User List page)
+	emailGroup.GET("/sent/by_user/:id", email.ListSentEmailsByUserIDHandler, middleware.RoleMiddleware(adminRoles), middleware.AdminPermissionMiddleware("all_sent")) // Admin: list sent emails by user
 	emailGroup.GET("/sent/list", email.GetUserSentEmailsHandler)                                                                                                      // User's own sent emails list
 	emailGroup.GET("/sent/detail/:id", email.GetUserSentEmailDetailHandler)                                                                                           // User's own sent email detail
 	emailGroup.GET("/sent", email.GetUserSentEmailsHandler)                                                                                                           // User's own sent emails
@@ -113,9 +113,9 @@ func RegisterRoutes(e *echo.Echo) {
 
 	// Admin inbox and sent views
 	adminGroup.GET("/inbox", admin.GetAdminInboxHandler, middleware.AdminPermissionMiddleware("all_inbox"))
-	adminGroup.GET("/inbox/:id", admin.GetAdminInboxDetailHandler, middleware.AdminPermissionMiddleware("all_inbox"))
+	adminGroup.GET("/inbox/:id", admin.GetAdminInboxDetailHandler, middleware.AdminAnyPermissionMiddleware("all_inbox", "user_list"))
 	adminGroup.GET("/sent", admin.GetAdminSentHandler, middleware.AdminPermissionMiddleware("all_sent"))
-	adminGroup.GET("/sent/:id", admin.GetAdminSentDetailHandler, middleware.AdminPermissionMiddleware("all_sent"))
+	adminGroup.GET("/sent/:id", admin.GetAdminSentDetailHandler, middleware.AdminAnyPermissionMiddleware("all_sent", "user_list"))
 
 	// Admin menu and permissions
 	adminGroup.GET("/menus", admin.GetMenusHandler)

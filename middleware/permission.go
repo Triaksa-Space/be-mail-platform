@@ -115,6 +115,40 @@ func AdminPermissionMiddleware(requiredPermission string) echo.MiddlewareFunc {
 	}
 }
 
+// AdminAnyPermissionMiddleware grants access if the admin has ANY of the listed permissions.
+// Use this when an endpoint is shared across multiple features (e.g. all_inbox OR user_list).
+func AdminAnyPermissionMiddleware(permissions ...string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			roleID := c.Get("role_id").(int64)
+			userID := c.Get("user_id").(int64)
+
+			if roleID == 1 {
+				return c.JSON(http.StatusForbidden, map[string]string{
+					"error": "Access denied. Admin privileges required.",
+				})
+			}
+
+			for _, perm := range permissions {
+				var has bool
+				err := config.DB.Get(&has, `
+					SELECT EXISTS(
+						SELECT 1 FROM admin_permissions
+						WHERE user_id = ? AND permission_key = ?
+					)
+				`, userID, perm)
+				if err == nil && has {
+					return next(c)
+				}
+			}
+
+			return c.JSON(http.StatusForbidden, map[string]string{
+				"error": "You don't have permission to access this resource",
+			})
+		}
+	}
+}
+
 // HasAdminPermission checks if an admin user has a specific permission
 func HasAdminPermission(userID int64, permission string) bool {
 	var exists bool
