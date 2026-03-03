@@ -15,15 +15,15 @@ import (
 
 // Valid permission keys
 var ValidPermissions = map[string]bool{
-	"overview":           true,
-	"user_list":          true,
-	"create_single":      true,
-	"create_bulk":        true,
-	"all_inbox":          true,
-	"all_sent":           true,
-	"terms_of_services":  true,
-	"privacy_policy":     true,
-	"roles_permissions":  true,
+	"overview":          true,
+	"user_list":         true,
+	"create_single":     true,
+	"create_bulk":       true,
+	"all_inbox":         true,
+	"all_sent":          true,
+	"terms_of_services": true,
+	"privacy_policy":    true,
+	"roles_permissions": true,
 }
 
 // AdminUser represents an admin user for the API response
@@ -39,17 +39,17 @@ type AdminUser struct {
 
 // AdminUserDB represents an admin user from the database
 type AdminUserDB struct {
-	ID                int64            `db:"id"`
-	Email             string           `db:"email"`
-	EncryptedPassword sql.NullString   `db:"encrypted_password"`
-	LastLogin         sql.NullTime     `db:"last_login"`
-	CreatedAt         time.Time        `db:"created_at"`
+	ID                int64          `db:"id"`
+	Email             string         `db:"email"`
+	EncryptedPassword sql.NullString `db:"encrypted_password"`
+	LastLogin         sql.NullTime   `db:"last_login"`
+	CreatedAt         time.Time      `db:"created_at"`
 }
 
 // ListAdminsResponse represents the list admins API response
 type ListAdminsResponse struct {
-	Data []AdminUser       `json:"data"`
-	Meta PaginationMeta    `json:"meta"`
+	Data []AdminUser    `json:"data"`
+	Meta PaginationMeta `json:"meta"`
 }
 
 // PaginationMeta represents pagination metadata
@@ -236,10 +236,13 @@ func GetAdminHandler(c echo.Context) error {
 	// Get permissions
 	permissions, _ := getAdminPermissions(admin.ID)
 
-	// Check if online
+	// Check if online — prefer Redis heartbeat, fall back to DB last_login
 	isOnline := false
 	var lastActiveAt *time.Time
-	if admin.LastLogin.Valid {
+	if redisTime := config.GetLastActive(admin.ID); redisTime != nil {
+		lastActiveAt = redisTime
+		isOnline = time.Since(*redisTime) < 15*time.Minute
+	} else if admin.LastLogin.Valid {
 		lastActiveAt = &admin.LastLogin.Time
 		isOnline = time.Since(admin.LastLogin.Time) < 15*time.Minute
 	}
