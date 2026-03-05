@@ -2815,8 +2815,8 @@ func GetUserSentEmailDetailHandler(c echo.Context) error {
 
 // SaveSentEmail saves a sent email to the sent_emails table
 func SaveSentEmail(userID int64, fromEmail, toEmail, subject, body string, attachments []string, provider, providerMsgID, status string) error {
-	// Create preview
-	bodyPreview := body
+	// Create preview as plain text
+	bodyPreview := utils.StripHTMLToText(body)
 	if len(bodyPreview) > 500 {
 		bodyPreview = bodyPreview[:500]
 	}
