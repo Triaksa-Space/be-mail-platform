@@ -188,7 +188,7 @@ func ForgotPasswordHandler(c echo.Context) error {
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="max-width:420px; width:100%%; background-color:#ffffff; border-radius:8px; box-shadow:0 10px 25px -8px rgba(16,24,40,0.18); padding:16px; font-family:Roboto, Arial, sans-serif;box-shadow: 0 6px 15px -2px rgba(16, 24, 40, 0.08), 0 6px 15px -2px rgba(16, 24, 40, 0.08);">
             <tr>
               <td style="padding-bottom:20px;">
-                <img src="https://image2url.com/r2/default/images/1771230290196-42620d10-b63b-46d7-8b1d-5879eb9c7830.png" width="112" height="40" alt="Mailria" style="display:block; border:0; outline:none; text-decoration:none;" />
+                <img src="https://mailria.com/_next/image?url=%2Fmailria.png&w=256&q=75" width="112" height="40" alt="Mailria" style="display:block; border:0; outline:none; text-decoration:none;" />
               </td>
             </tr>
             <tr>
