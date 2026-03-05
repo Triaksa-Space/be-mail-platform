@@ -871,7 +871,7 @@ func BulkCreateUserHandler(c echo.Context) error {
 		})
 	}
 
-	preview := emailBody
+	preview := utils.StripHTMLToText(emailBody)
 	if len(preview) > 500 {
 		preview = preview[:500]
 	}
@@ -1526,7 +1526,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 		} else {
 			response["credentials_sent_to"] = req.SendTo
 
-			previewV2 := emailBody
+			previewV2 := utils.StripHTMLToText(emailBody)
 			if len(previewV2) > 500 {
 				previewV2 = previewV2[:500]
 			}
