@@ -483,6 +483,14 @@ func UpdateAdminHandler(c echo.Context) error {
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update password"})
 		}
+
+		// Revoke all refresh tokens only on password change (force logout)
+		if _, err := config.DB.Exec(`
+			UPDATE refresh_tokens SET revoked_at = NOW()
+			WHERE user_id = ? AND revoked_at IS NULL
+		`, adminID); err != nil {
+			fmt.Println("Warning: Failed to revoke refresh tokens after password change:", err)
+		}
 	}
 
 	// Update permissions - delete all and re-insert
@@ -503,15 +511,6 @@ func UpdateAdminHandler(c echo.Context) error {
 
 	if err := tx.Commit(); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-	}
-
-	// Revoke all refresh tokens for target admin (force logout on all devices)
-	// This ensures password changes and permission updates take effect immediately
-	if _, err := config.DB.Exec(`
-		UPDATE refresh_tokens SET revoked_at = NOW()
-		WHERE user_id = ? AND revoked_at IS NULL
-	`, adminID); err != nil {
-		fmt.Println("Warning: Failed to revoke refresh tokens after admin update:", err)
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
