@@ -41,6 +41,7 @@ type AdminUser struct {
 type AdminUserDB struct {
 	ID                int64          `db:"id"`
 	Email             string         `db:"email"`
+	Password          sql.NullString `db:"password"`
 	EncryptedPassword sql.NullString `db:"encrypted_password"`
 	LastLogin         sql.NullTime   `db:"last_login"`
 	CreatedAt         time.Time      `db:"created_at"`
@@ -400,7 +401,7 @@ func UpdateAdminHandler(c echo.Context) error {
 	// Check if admin exists
 	var existingAdmin AdminUserDB
 	err = config.DB.Get(&existingAdmin, `
-		SELECT id, email, created_at
+		SELECT id, email, password, created_at
 		FROM users
 		WHERE id = ? AND role_id = 2
 	`, adminID)
@@ -460,7 +461,7 @@ func UpdateAdminHandler(c echo.Context) error {
 		username = req.Username
 	}
 
-	// Update password if provided
+	// Update password if provided and different from current
 	if req.Password != "" {
 		if len(req.Password) < 6 {
 			return c.JSON(http.StatusBadRequest, map[string]string{
@@ -468,28 +469,31 @@ func UpdateAdminHandler(c echo.Context) error {
 			})
 		}
 
-		hashedPassword, err := utils.HashPassword(req.Password)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-		}
+		// Skip update if the submitted password matches the existing hash
+		if !utils.CheckPasswordHash(req.Password, existingAdmin.Password.String) {
+			hashedPassword, err := utils.HashPassword(req.Password)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
 
-		encryptedPassword, err := utils.EncryptAES(req.Password)
-		if err != nil {
-			fmt.Println("Error encrypting password:", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
-		}
+			encryptedPassword, err := utils.EncryptAES(req.Password)
+			if err != nil {
+				fmt.Println("Error encrypting password:", err)
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
 
-		_, err = tx.Exec("UPDATE users SET password = ?, encrypted_password = ?, token_version = token_version + 1, updated_at = NOW() WHERE id = ?", hashedPassword, encryptedPassword, adminID)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update password"})
-		}
+			_, err = tx.Exec("UPDATE users SET password = ?, encrypted_password = ?, token_version = token_version + 1, updated_at = NOW() WHERE id = ?", hashedPassword, encryptedPassword, adminID)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update password"})
+			}
 
-		// Revoke all refresh tokens only on password change (force logout)
-		if _, err := config.DB.Exec(`
-			UPDATE refresh_tokens SET revoked_at = NOW()
-			WHERE user_id = ? AND revoked_at IS NULL
-		`, adminID); err != nil {
-			fmt.Println("Warning: Failed to revoke refresh tokens after password change:", err)
+			// Revoke all refresh tokens only when password actually changed (force logout)
+			if _, err := config.DB.Exec(`
+				UPDATE refresh_tokens SET revoked_at = NOW()
+				WHERE user_id = ? AND revoked_at IS NULL
+			`, adminID); err != nil {
+				fmt.Println("Warning: Failed to revoke refresh tokens after password change:", err)
+			}
 		}
 	}
 
