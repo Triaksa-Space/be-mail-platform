@@ -2303,18 +2303,20 @@ func generatePreview(plainText string, htmlBody string) string {
 // // Simple HTML to text converter (you might want to use a proper library)
 func html2text(contentHTML string) string {
 	text := contentHTML
+
+	// Decode HTML entities FIRST so encoded tags like &lt;img&gt; become
+	// real tags and are caught by the removal regex below.
+	text = html.UnescapeString(text)
+
 	text = strings.ReplaceAll(text, "<br>", "\n")
 	text = strings.ReplaceAll(text, "<br/>", "\n")
 	text = strings.ReplaceAll(text, "<br />", "\n")
 	text = strings.ReplaceAll(text, "</p>", "\n")
 	text = strings.ReplaceAll(text, "</div>", "\n")
 
-	// Remove all other HTML tags
+	// Remove all HTML tags
 	re := regexp.MustCompile("<[^>]*>")
 	text = re.ReplaceAllString(text, "")
-
-	// Decode HTML entities
-	text = html.UnescapeString(text)
 
 	// Remove zero-width spaces
 	text = strings.ReplaceAll(text, "\u200B", "")
