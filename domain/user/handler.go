@@ -1549,7 +1549,7 @@ func BulkCreateUserV2Handler(c echo.Context) error {
 	return c.JSON(http.StatusCreated, response)
 }
 
-const bulkCreateEmailLogoURL = "https://image2url.com/r2/default/images/1771230290196-42620d10-b63b-46d7-8b1d-5879eb9c7830.png"
+const bulkCreateEmailLogoURL = "https://mailria.com/mailria.png"
 
 func buildBulkCreateEmailBody(createdUsers []map[string]string) string {
 	var rows strings.Builder
