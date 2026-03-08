@@ -605,7 +605,8 @@ func CleanupExpiredTokens() error {
 
 	result, err := config.DB.Exec(`
 		DELETE FROM refresh_tokens
-		WHERE expires_at < NOW() OR revoked_at IS NOT NULL
+		WHERE (expires_at < NOW() AND revoked_at IS NULL)
+		   OR (revoked_at IS NOT NULL AND (grace_until IS NULL OR grace_until < NOW()))
 	`)
 	if err != nil {
 		log.Error("Failed to cleanup expired tokens", err)
