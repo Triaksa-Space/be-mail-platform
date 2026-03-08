@@ -283,9 +283,24 @@ func RefreshTokenHandler(c echo.Context) error {
 
 	// Check if token is revoked
 	if storedToken.RevokedAt.Valid {
-		// Token reuse detected - this could be a theft attempt
-		// Revoke all tokens for this user for security
-		log.Warn("Refresh token reuse detected - possible token theft",
+		// A token with replaced_by was revoked via normal rotation — the client
+		// legitimately used it and received (or should have received) a new token.
+		// This happens when a network error causes the client to retry with the
+		// already-rotated token. Reject this device's session only; do NOT wipe
+		// all other devices (each device has its own independent token chain).
+		if storedToken.ReplacedBy.Valid {
+			log.Warn("Already-rotated refresh token reused - rejecting this session only (network retry or stale client)",
+				logger.UserID(storedToken.UserID),
+			)
+			return apperrors.RespondWithError(c, apperrors.NewUnauthorized(
+				apperrors.ErrCodeRefreshTokenReused,
+				"Your session has expired. Please login again.",
+			))
+		}
+
+		// No replaced_by: token was revoked by logout or admin action, then someone
+		// tried to use it. This is genuinely suspicious — revoke all sessions.
+		log.Warn("Revoked (non-rotated) refresh token reused - possible token theft, revoking all sessions",
 			logger.UserID(storedToken.UserID),
 		)
 
