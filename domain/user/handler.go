@@ -306,13 +306,25 @@ func ChangePasswordHandler(c echo.Context) error {
 		))
 	}
 
+	// Encrypt password for SuperAdmin viewing in Roles & Permissions.
+	newEncryptedPassword, err := utils.EncryptAES(req.NewPassword)
+	if err != nil {
+		log.Error("Failed to encrypt new password", err)
+		return apperrors.RespondWithError(c, apperrors.NewInternal(
+			apperrors.ErrCodeUnexpectedError,
+			"Internal server error.",
+			err,
+		))
+	}
+
 	// Update the user's password.
 	_, err = config.DB.Exec(`
         UPDATE users
         SET password = ?,
+            encrypted_password = ?,
             token_version = token_version + 1,
             updated_at = NOW()
-        WHERE id = ?`, newHashedPassword, req.UserID)
+        WHERE id = ?`, newHashedPassword, newEncryptedPassword, req.UserID)
 	if err != nil {
 		log.Error("Failed to update password in database", err)
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
