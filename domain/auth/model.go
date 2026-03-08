@@ -7,17 +7,24 @@ import (
 
 // RefreshToken represents a stored refresh token
 type RefreshToken struct {
-	ID         int64        `db:"id"`
-	UserID     int64        `db:"user_id"`
-	TokenHash  string       `db:"token_hash"`
-	RememberMe bool         `db:"remember_me"`
-	ExpiresAt  time.Time    `db:"expires_at"`
-	CreatedAt  time.Time    `db:"created_at"`
-	RevokedAt  sql.NullTime `db:"revoked_at"`
-	ReplacedBy sql.NullInt64 `db:"replaced_by"`
+	ID         int64          `db:"id"`
+	UserID     int64          `db:"user_id"`
+	TokenHash  string         `db:"token_hash"`
+	RememberMe bool           `db:"remember_me"`
+	ExpiresAt  time.Time      `db:"expires_at"`
+	CreatedAt  time.Time      `db:"created_at"`
+	RevokedAt  sql.NullTime   `db:"revoked_at"`
+	ReplacedBy sql.NullInt64  `db:"replaced_by"`
+	GraceUntil sql.NullTime   `db:"grace_until"`
 	UserAgent  sql.NullString `db:"user_agent"`
 	IPAddress  sql.NullString `db:"ip_address"`
 }
+
+// GracePeriod is how long a rotated token stays usable after rotation.
+// This makes concurrent refresh requests from multiple tabs idempotent:
+// whichever tab arrives second within the window gets the replacement token
+// instead of a 401, so no tab is spuriously logged out.
+const GracePeriod = 30 * time.Second
 
 // LoginRequest represents the login request payload
 type LoginRequest struct {
