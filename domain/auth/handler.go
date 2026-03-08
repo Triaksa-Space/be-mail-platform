@@ -260,7 +260,7 @@ func RefreshTokenHandler(c echo.Context) error {
 	// Find the refresh token
 	var storedToken RefreshToken
 	err := config.DB.Get(&storedToken, `
-		SELECT id, user_id, token_hash, remember_me, expires_at, created_at, revoked_at, replaced_by
+		SELECT id, user_id, token_hash, remember_me, expires_at, created_at, revoked_at, replaced_by, grace_until
 		FROM refresh_tokens
 		WHERE token_hash = ?
 	`, tokenHash)
@@ -283,12 +283,34 @@ func RefreshTokenHandler(c echo.Context) error {
 
 	// Check if token is revoked
 	if storedToken.RevokedAt.Valid {
-		// A token with replaced_by was revoked via normal rotation — the client
-		// legitimately used it and received (or should have received) a new token.
-		// This happens when a network error causes the client to retry with the
-		// already-rotated token. Reject this device's session only; do NOT wipe
-		// all other devices (each device has its own independent token chain).
+		// A token with replaced_by was revoked via normal rotation.
 		if storedToken.ReplacedBy.Valid {
+			// ── Grace period check ────────────────────────────────────────────
+			// Multiple browser tabs may send the same refresh token concurrently.
+			// The second request arrives after the first already rotated the
+			// token.  Within the grace window we treat the replacement token as
+			// the new base and perform a fresh rotation from it, so the caller
+			// gets a valid token pair instead of a 401 that would log them out.
+			if storedToken.GraceUntil.Valid && storedToken.GraceUntil.Time.After(now) {
+				var replacement RefreshToken
+				replErr := config.DB.Get(&replacement, `
+					SELECT id, user_id, token_hash, remember_me, expires_at, created_at, revoked_at, replaced_by, grace_until
+					FROM refresh_tokens
+					WHERE id = ?
+				`, storedToken.ReplacedBy.Int64)
+
+				if replErr == nil && !replacement.RevokedAt.Valid && replacement.ExpiresAt.After(now) {
+					// Swap to the replacement token and fall through to the
+					// normal rotation path below as if it were the original request.
+					log.Debug("Grace period: rotating from replacement token",
+						logger.UserID(storedToken.UserID),
+					)
+					storedToken = replacement
+					goto rotateToken //nolint:gotos
+				}
+				// Replacement is gone or already expired — treat as normal expiry.
+			}
+
 			log.Warn("Already-rotated refresh token reused - rejecting this session only (network retry or stale client)",
 				logger.UserID(storedToken.UserID),
 			)
@@ -319,6 +341,7 @@ func RefreshTokenHandler(c echo.Context) error {
 		))
 	}
 
+rotateToken:
 	// Check if token is expired
 	if storedToken.ExpiresAt.Before(now) {
 		log.Debug("Refresh token expired", logger.UserID(storedToken.UserID))
@@ -403,12 +426,14 @@ func RefreshTokenHandler(c echo.Context) error {
 
 	newTokenID, _ := result.LastInsertId()
 
-	// Revoke old token and set replaced_by
+	// Revoke old token and set replaced_by + grace_until.
+	// grace_until gives concurrent tabs a window to use the old token and
+	// receive the new one instead of a 401.
 	_, err = tx.Exec(`
 		UPDATE refresh_tokens
-		SET revoked_at = ?, replaced_by = ?
+		SET revoked_at = ?, replaced_by = ?, grace_until = ?
 		WHERE id = ?
-	`, now, newTokenID, storedToken.ID)
+	`, now, newTokenID, now.Add(GracePeriod), storedToken.ID)
 	if err != nil {
 		log.Error("Failed to revoke old refresh token", err, logger.UserID(user.ID))
 		return apperrors.RespondWithError(c, apperrors.NewInternal(
