@@ -47,7 +47,7 @@ cp .env.example .env
 go mod download
 
 # Run database migrations
-goose -dir migrations mysql "user:password@tcp(localhost:3306)/mailria?parseTime=true" up
+goose -dir migrations mysql "root:password!@tcp(localhost:3306)/mailria?parseTime=true" up
 
 # Start the server
 go run cmd/main.go server
@@ -1407,3 +1407,20 @@ Manual QA test cases are documented in:
 ---
 
 *Last updated: January 2025*
+
+
+    What     │                         Details                         │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │ Domains      │ mailria.com                                             │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │ Admin users  │ superadmin@mailria.com / superadmin123 (role_id=2)      │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │              │ admin@mailria.com / admin123 (role_id=2)                │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │ Regular user │ user@mailria.com / user123 (role_id=1)                  │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │ Test users   │ person1@mailria.com … person5@mailria.com               │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │ Permissions  │ All 9 permissions auto-assigned to every role_id=2 user │
+  ├──────────────┼─────────────────────────────────────────────────────────┤
+  │ Emails       │ 25 inbox + 25 sent emails per user         
