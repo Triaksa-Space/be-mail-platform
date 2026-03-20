@@ -1880,7 +1880,7 @@ func SyncEmails() error {
 		fmt.Println("Processing ", len(page.Contents))
 		for _, obj := range page.Contents {
 			messageID := *obj.Key
-			if messageID == "" {
+			if messageID == "" || strings.HasSuffix(messageID, "/") {
 				continue
 			}
 			fmt.Println("messageID", messageID)
@@ -2097,7 +2097,7 @@ func SyncBucketInboxHandler(c echo.Context) error {
 		for _, obj := range page.Contents {
 			stats.TotalEmails++
 			messageID := *obj.Key
-			if messageID == "" {
+			if messageID == "" || strings.HasSuffix(messageID, "/") {
 				stats.SkippedEmails++
 				continue
 			}
