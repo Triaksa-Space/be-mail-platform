@@ -66,9 +66,15 @@ func main() {
 			log.Fatalf("Failed to hash password for user %s: %v", user.Email, err)
 		}
 
+		encryptedPassword, err := utils.EncryptAES(user.Password)
+		if err != nil {
+			log.Printf("Warning: Failed to encrypt password for user %s: %v", user.Email, err)
+			encryptedPassword = ""
+		}
+
 		result, err := config.DB.Exec(
-			"INSERT INTO users (email, password, role_id, last_login, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			user.Email, hashedPassword, user.RoleID, user.LastLogin, user.CreatedAt, user.CreatedAt,
+			"INSERT INTO users (email, password, encrypted_password, role_id, last_login, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			user.Email, hashedPassword, encryptedPassword, user.RoleID, user.LastLogin, user.CreatedAt, user.CreatedAt,
 		)
 		if err != nil {
 			log.Fatalf("Failed to seed user %s: %v", user.Email, err)
