@@ -1938,7 +1938,10 @@ func storeRawEmail(s3Client *s3.S3, messageID string, emailContent []byte) error
 	// fmt.Println("start extract", time.Now())
 	sendEmailTo, dateEmail, err := extractRecipientEmail(emailContent)
 	if err != nil {
-		return err
+		fmt.Printf("Skipping email %s: could not determine recipient (%v), deleting from S3\n", messageID, err)
+		bucketName := viper.GetString("S3_BUCKET_NAME")
+		pkg.DeleteS3ByMessageID(s3Client, bucketName, messageID)
+		return nil
 	}
 	// fmt.Println("finish extract", time.Now())
 	fmt.Println("sendEmailTo", sendEmailTo)
