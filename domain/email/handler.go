@@ -2043,6 +2043,16 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 			}
 		}
 		fmt.Println("extractRecipientEmail - Failed to parse TO and Received headers")
+		fmt.Println("DEBUG raw To header:", env.GetHeader("To"))
+		fmt.Println("DEBUG raw Cc header:", env.GetHeader("Cc"))
+		fmt.Println("DEBUG raw Delivered-To header:", env.GetHeader("Delivered-To"))
+		fmt.Println("DEBUG raw X-Original-To header:", env.GetHeader("X-Original-To"))
+		fmt.Println("DEBUG raw From header:", env.GetHeader("From"))
+		fmt.Println("DEBUG raw Subject:", env.GetHeader("Subject"))
+		fmt.Println("DEBUG Received headers count:", len(receivedHeaders))
+		for i, rh := range receivedHeaders {
+			fmt.Printf("DEBUG Received[%d]: %s\n", i, rh)
+		}
 		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
 	} else {
 		fmt.Println("extractRecipientEmail - TO", toAddresses)
