@@ -2042,7 +2042,7 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 				}
 			}
 		}
-		fmt.Println("extractRecipientEmail - Failed to parse TO and Received headers")
+		fmt.Println("extractRecipientEmail - Failed to parse TO and Received headers, falling back to support@mailria.com")
 		fmt.Println("DEBUG raw To header:", env.GetHeader("To"))
 		fmt.Println("DEBUG raw Cc header:", env.GetHeader("Cc"))
 		fmt.Println("DEBUG raw Delivered-To header:", env.GetHeader("Delivered-To"))
@@ -2053,7 +2053,7 @@ func extractRecipientEmail(emailContent []byte) (string, time.Time, error) {
 		for i, rh := range receivedHeaders {
 			fmt.Printf("DEBUG Received[%d]: %s\n", i, rh)
 		}
-		return "", time.Time{}, fmt.Errorf("failed to parse recipient addresses")
+		return "support@mailria.com", time.Now(), nil
 	} else {
 		fmt.Println("extractRecipientEmail - TO", toAddresses)
 	}
