@@ -1956,6 +1956,7 @@ func storeRawEmail(s3Client *s3.S3, messageID string, emailContent []byte) error
 		fmt.Printf("Failed to get user ID for email %s: %v\n", sendEmailTo, err)
 		fmt.Println("User not registered in our Database")
 		bucketName := viper.GetString("S3_BUCKET_NAME")
+		fmt.Printf("Deleting object %s from bucket %s\n", messageID, bucketName)
 		// Delete the email object from S3 after storing
 		err := pkg.DeleteS3ByMessageID(s3Client, bucketName, messageID)
 		if err != nil {
